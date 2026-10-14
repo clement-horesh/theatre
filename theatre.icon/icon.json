@@ -1,0 +1,46 @@
+{
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill-specializations" : [
+            {
+              "value" : "system-dark"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "system-light"
+            }
+          ],
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "SVG image.svg",
+          "name" : "SVG image",
+          "position" : {
+            "scale" : 6.9,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.6
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
