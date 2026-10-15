@@ -15,6 +15,7 @@ struct NativePlayerMenu: NSViewRepresentable {
     let selection: Int
     let onSelect: (Int) -> Void
     let onTrackingChange: (Bool) -> Void
+    var onAppearance: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSButton {
@@ -41,25 +42,31 @@ struct NativePlayerMenu: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSMenuDelegate {
+    final class Coordinator: NSObject {
         var configuration: NativePlayerMenu
-        private var menu: NSMenu?
+        private var isTracking = false
         private var selectionAction: ((Int) -> Void)?
-        private var trackingAction: ((Bool) -> Void)?
+        private var appearanceAction: (() -> Void)?
 
         init(_ configuration: NativePlayerMenu) { self.configuration = configuration }
 
         @objc func openMenu(_ button: NSButton) {
-            guard menu == nil else { return }
+            guard !isTracking else { return }
+            isTracking = true
             let snapshot = configuration
             selectionAction = snapshot.onSelect
-            trackingAction = snapshot.onTrackingChange
-            trackingAction?(true)
+            appearanceAction = snapshot.onAppearance
+            snapshot.onTrackingChange(true)
+            defer {
+                isTracking = false
+                snapshot.onTrackingChange(false)
+                selectionAction = nil
+                appearanceAction = nil
+            }
             let popup = NSMenu(title: snapshot.title)
             popup.autoenablesItems = false
             popup.minimumWidth = 210
             popup.appearance = NSAppearance(named: .darkAqua)
-            popup.delegate = self
             let heading = NSMenuItem(title: snapshot.title, action: nil, keyEquivalent: "")
             heading.isEnabled = false
             popup.addItem(heading)
@@ -71,22 +78,20 @@ struct NativePlayerMenu: NSViewRepresentable {
                 item.state = choice.id == snapshot.selection ? .on : .off
                 popup.addItem(item)
             }
-            menu = popup
+            if snapshot.onAppearance != nil {
+                popup.addItem(.separator())
+                let item = NSMenuItem(title: "Appearance…", action: #selector(openAppearance), keyEquivalent: "")
+                item.target = self
+                popup.addItem(item)
+            }
             popup.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 6), in: button)
-            // Also runs for dismissal without a selection.
-            finishTracking()
-            selectionAction = nil
+        }
+
+        @objc private func openAppearance() {
+            let action = appearanceAction
+            DispatchQueue.main.async { action?() }
         }
 
         @objc func selectChoice(_ item: NSMenuItem) { selectionAction?(item.tag) }
-        func menuDidClose(_ menu: NSMenu) { finishTracking() }
-        private func finishTracking() {
-            guard menu != nil else { return }
-            menu = nil
-            trackingAction?(false)
-            trackingAction = nil
-            // Keep the selection closure until popUp returns: menuDidClose can
-            // run before AppKit dispatches the chosen item's action.
-        }
     }
 }

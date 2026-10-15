@@ -17,12 +17,17 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.backgroundColor = .black
+        window.acceptsMouseMovedEvents = true
         window.collectionBehavior = [.fullScreenPrimary]
         super.init(window: window)
         window.delegate = self
-        window.contentView = NSHostingView(
+        let content = NSHostingView(
             rootView: PlayerPane(model: model, playback: model.playback)
                 .ignoresSafeArea().onExitCommand { model.exitVideoFullscreen() })
+        // The video window owns its size and aspect ratio. SwiftUI must not
+        // replace those constraints when its playback view changes.
+        content.sizingOptions = []
+        window.contentView = content
         window.center()
     }
 
@@ -55,21 +60,15 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true)
     }
 
-    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        guard !changingFullscreen, !sender.styleMask.contains(.fullScreen) else { return frameSize }
-        let widthChange = abs(frameSize.width - sender.frame.width)
-        let heightChange = abs(frameSize.height - sender.frame.height) * videoAspectRatio
-        let width = max(
-            sender.minSize.width,
-            widthChange >= heightChange ? frameSize.width : frameSize.height * videoAspectRatio)
-        return NSSize(width: width, height: width / videoAspectRatio)
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        changingFullscreen = true
+        model?.playerFullscreenChanged(true)
     }
-
-    func windowWillEnterFullScreen(_ notification: Notification) { changingFullscreen = true }
     func windowDidEnterFullScreen(_ notification: Notification) { changingFullscreen = false }
     func windowWillExitFullScreen(_ notification: Notification) { changingFullscreen = true }
     func windowDidExitFullScreen(_ notification: Notification) {
         changingFullscreen = false
+        model?.playerFullscreenChanged(false)
         fitVideo(aspectRatio: videoAspectRatio)
     }
 

@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import SwiftUI
 
@@ -7,6 +8,7 @@ struct PlayerPane: View {
     @StateObject private var chrome = PlayerChromeState()
     @State private var scrubSeconds = 0.0
     @State private var isScrubbing = false
+    @State private var showsSubtitleAppearance = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var isActivelyPlaying: Bool {
         playback.isPlaying && !playback.hasEnded && playback.errorMessage == nil && model.playbackError == nil
@@ -15,9 +17,15 @@ struct PlayerPane: View {
     var body: some View {
         ZStack {
             Color.black
-            VLCPlayerView(playback: playback)
-                .onTapGesture(count: 2) { model.toggleVideoFullscreen() }
-                .onTapGesture { showControls() }
+            Group {
+                if playback.usesApplePlayback {
+                    ApplePlayerView(playback: playback.applePlayback)
+                } else {
+                    VLCPlayerView(playback: playback)
+                }
+            }
+            .onTapGesture(count: 2) { model.toggleVideoFullscreen() }
+            .onTapGesture { showControls() }
             playerControls
                 .opacity(chrome.isVisible ? 1 : 0)
                 .allowsHitTesting(chrome.isVisible)
@@ -62,6 +70,17 @@ struct PlayerPane: View {
         .onChange(of: playback.errorMessage) { _ in showControls() }
         .onChange(of: model.currentVideo?.id) { _ in showControls() }
         .onChange(of: model.isVideoFullscreen) { _ in showControls() }
+        .alert(
+            "Playback option unavailable",
+            isPresented: Binding(
+                get: { model.presentationError != nil },
+                set: { if !$0 { model.presentationError = nil } }
+            )
+        ) {
+            Button("OK") { model.presentationError = nil }
+        } message: {
+            Text(model.presentationError ?? "")
+        }
     }
 
     private var playerControls: some View {
@@ -82,6 +101,8 @@ struct PlayerPane: View {
             ).allowsHitTesting(false)
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
+                    presentationControls
+                        .padding(.top, model.isVideoFullscreen ? 28 : 0)
                     Spacer()
                     volumeControl
                 }
@@ -89,8 +110,13 @@ struct PlayerPane: View {
                 Spacer(minLength: 16)
                 HStack(alignment: .bottom, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
-                        if let series = model.currentVideo?.seriesName {
-                            Text(model.currentVideo?.name ?? "").font(.caption).lineLimit(1)
+                        if let video = model.currentVideo, let series = video.seriesName {
+                            let episode = [
+                                video.parentIndexNumber.map { "S\($0)" }, video.indexNumber.map { "E\($0)" },
+                            ]
+                            .compactMap { $0 }.joined(separator: ", ")
+                            Text(episode.isEmpty ? video.name : "\(episode) · \(video.name)")
+                                .font(.caption).lineLimit(1)
                             Text(series).font(.title2.weight(.semibold)).lineLimit(2)
                         } else {
                             Text(model.currentVideo?.name ?? "").font(.title3.weight(.semibold)).lineLimit(2)
@@ -144,12 +170,56 @@ struct PlayerPane: View {
         .onHover { chrome.setInteraction(.volume, active: $0, isPlaying: playback.isPlaying) }
     }
 
+    private var presentationControls: some View {
+        HStack(spacing: 3) {
+            Button {
+                Task { await model.togglePictureInPicture() }
+            } label: {
+                Image(systemName: playback.isPictureInPictureActive ? "pip.exit" : "pip.enter")
+                    .resizable().scaledToFit()
+                    .frame(width: 19, height: 17).frame(width: 30, height: 28).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(
+                model.isPreparingSystemPlayback || model.isStartingPlayback
+                    || playback.applePlayback.player.isExternalPlaybackActive
+            )
+            .help("Picture in Picture").accessibilityLabel("Picture in Picture")
+            AirPlayPicker(
+                player: playback.applePlayback.player,
+                onPrepare: { Task { _ = await model.prepareSystemPlayback(reportErrors: false) } },
+                onTracking: menuTracking
+            )
+            .frame(width: 30, height: 28)
+            .overlay {
+                Image(systemName: "airplayvideo").font(.system(size: 17))
+                    .foregroundStyle(
+                        playback.applePlayback.player.isExternalPlaybackActive ? Color.accentColor : .white
+                    )
+                    .allowsHitTesting(false).accessibilityHidden(true)
+            }
+            .help("AirPlay")
+        }
+        .padding(4).modifier(PlayerGlass(shape: .capsule))
+        .onHover { chrome.setInteraction(.presentation, active: $0, isPlaying: playback.isPlaying) }
+    }
+
     private var trackControls: some View {
         HStack(spacing: 3) {
             NativePlayerMenu(
                 symbol: "captions.bubble", title: "Subtitles", identifier: "subtitleMenu",
                 choices: subtitleChoices, selection: Int(playback.selectedSubtitle),
-                onSelect: { playback.selectSubtitle(Int32($0)) }, onTrackingChange: menuTracking)
+                onSelect: { playback.selectSubtitle(Int32($0)) }, onTrackingChange: menuTracking,
+                onAppearance: { showsSubtitleAppearance = true }
+            )
+            .popover(isPresented: $showsSubtitleAppearance) {
+                SubtitleAppearanceView(
+                    appearance: playback.subtitleAppearance,
+                    onApply: playback.applySubtitleAppearance
+                )
+                .preferredColorScheme(.dark)
+                .onAppear { menuTracking(true) }.onDisappear { menuTracking(false) }
+            }
             NativePlayerMenu(
                 symbol: "waveform", title: "Audio", identifier: "audioMenu",
                 choices: playback.audioTracks.filter { $0.id >= 0 }.map { .init(id: Int($0.id), title: $0.name) },
@@ -241,7 +311,7 @@ private struct PlayerGlass: ViewModifier {
 
 @MainActor
 final class PlayerChromeState: ObservableObject {
-    enum Interaction: Hashable { case transport, volume, tracks, timeline, scrubbing, menu }
+    enum Interaction: Hashable { case transport, volume, tracks, timeline, scrubbing, menu, presentation }
     @Published private(set) var isVisible = true
     private var hideTask: Task<Void, Never>?
     private var interactions: Set<Interaction> = []

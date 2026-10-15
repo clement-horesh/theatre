@@ -437,6 +437,7 @@ final class JellyfinClientTests: XCTestCase {
         StubProtocol.handler = { request in
             let body = try StubProtocol.body(request)
             XCTAssertEqual(body["EnableDirectPlay"] as? Bool, false)
+            XCTAssertEqual(body["EnableDirectStream"] as? Bool, false)
             XCTAssertEqual(body["AllowVideoStreamCopy"] as? Bool, false)
             XCTAssertEqual(body["AllowAudioStreamCopy"] as? Bool, false)
             return (
@@ -445,6 +446,30 @@ final class JellyfinClientTests: XCTestCase {
             )
         }
         let stream = try await client().playback(for: video(), compatibleOnly: true)
+        XCTAssertEqual(stream.method, "Transcode")
+        XCTAssertEqual(stream.url.path, "/jellyfin/Videos/video-1/master.m3u8")
+    }
+
+    func testSystemPlaybackRequestsH264AACAndSelectableHLSSubtitles() async throws {
+        StubProtocol.handler = { request in
+            let body = try StubProtocol.body(request)
+            XCTAssertEqual(body["EnableDirectPlay"] as? Bool, false)
+            XCTAssertEqual(body["EnableDirectStream"] as? Bool, false)
+            XCTAssertEqual(body["AllowVideoStreamCopy"] as? Bool, false)
+            XCTAssertEqual(body["AllowAudioStreamCopy"] as? Bool, false)
+            let profile = try XCTUnwrap(body["DeviceProfile"] as? [String: Any])
+            let transcode = try XCTUnwrap((profile["TranscodingProfiles"] as? [[String: Any]])?.first)
+            XCTAssertEqual(transcode["VideoCodec"] as? String, "h264")
+            XCTAssertEqual(transcode["AudioCodec"] as? String, "aac")
+            XCTAssertEqual(transcode["EnableSubtitlesInManifest"] as? Bool, true)
+            let subtitles = try XCTUnwrap(profile["SubtitleProfiles"] as? [[String: String]])
+            XCTAssertEqual(subtitles, [["Format": "vtt", "Method": "Hls"]])
+            return (
+                200,
+                #"{"MediaSources":[{"Id":"source-1","TranscodingUrl":"/Videos/video-1/master.m3u8"}],"PlaySessionId":"play-1"}"#
+            )
+        }
+        let stream = try await client().playback(for: video(), nativePlayer: true)
         XCTAssertEqual(stream.method, "Transcode")
         XCTAssertEqual(stream.url.path, "/jellyfin/Videos/video-1/master.m3u8")
     }

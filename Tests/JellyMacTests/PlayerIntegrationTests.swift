@@ -211,7 +211,7 @@ final class PlayerIntegrationTests: XCTestCase {
     }
 
     @MainActor
-    func testPlayerWindowFitsVideoAndLocksHorizontalAndVerticalResizing() throws {
+    func testPlayerWindowFitsVideoAndConfiguresNativeAspectConstraint() throws {
         _ = NSApplication.shared
         let controller = PlayerWindowController(model: MemorySessionStore().makeModel())
         let window = try XCTUnwrap(controller.window)
@@ -223,17 +223,7 @@ final class PlayerIntegrationTests: XCTestCase {
             let content = try XCTUnwrap(window.contentView)
             XCTAssertEqual(content.bounds.width / content.bounds.height, ratio, accuracy: 0.001)
             XCTAssertEqual(window.aspectRatio.width / window.aspectRatio.height, ratio, accuracy: 0.001)
-            for proposed in [
-                NSSize(width: window.frame.width + 100, height: window.frame.height),
-                NSSize(width: window.frame.width, height: window.frame.height + 100),
-            ] {
-                let constrained = controller.windowWillResize(window, to: proposed)
-                XCTAssertEqual(constrained.width / constrained.height, ratio, accuracy: 0.001)
-                XCTAssertGreaterThanOrEqual(constrained.width, window.minSize.width)
-            }
             controller.windowWillEnterFullScreen(Notification(name: NSWindow.willEnterFullScreenNotification))
-            let fullscreen = NSSize(width: 1440, height: 900)
-            XCTAssertEqual(controller.windowWillResize(window, to: fullscreen), fullscreen)
             controller.windowDidExitFullScreen(Notification(name: NSWindow.didExitFullScreenNotification))
             XCTAssertEqual(window.frame.width / window.frame.height, ratio, accuracy: 0.001)
         }

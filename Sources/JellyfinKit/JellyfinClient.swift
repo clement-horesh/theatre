@@ -244,11 +244,16 @@ public struct JellyfinClient: Sendable {
         return request
     }
 
-    public func playback(for item: VideoItem, compatibleOnly: Bool = false) async throws -> PlaybackStream {
+    public func playback(for item: VideoItem, compatibleOnly: Bool = false, nativePlayer: Bool = false) async throws
+        -> PlaybackStream
+    {
         guard let session else { throw JellyfinError.unauthorized }
+        let compatibleOnly = compatibleOnly || nativePlayer
         let body = PlaybackBody(
             userID: session.userID, enableDirectPlay: !compatibleOnly,
-            allowVideoStreamCopy: !compatibleOnly, allowAudioStreamCopy: !compatibleOnly)
+            enableDirectStream: !compatibleOnly,
+            allowVideoStreamCopy: !compatibleOnly, allowAudioStreamCopy: !compatibleOnly,
+            deviceProfile: PlaybackDeviceProfile(nativePlayer: nativePlayer))
         let response: PlaybackResponse = try decode(
             await request(
                 "Items/\(item.id)/PlaybackInfo",
@@ -542,7 +547,7 @@ private struct MediaStream: Decodable {
 private struct PlaybackBody: Encodable {
     let userID: String
     let enableDirectPlay: Bool
-    let enableDirectStream = true
+    let enableDirectStream: Bool
     let enableTranscoding = true
     let allowVideoStreamCopy: Bool
     let allowAudioStreamCopy: Bool
@@ -550,7 +555,7 @@ private struct PlaybackBody: Encodable {
     let maxStreamingBitrate = 200_000_000
     let maxAudioChannels = 8
     let startTimeTicks = 0
-    let deviceProfile = VLCDeviceProfile()
+    let deviceProfile: PlaybackDeviceProfile
 
     enum CodingKeys: String, CodingKey {
         case userID = "UserId"
@@ -566,13 +571,21 @@ private struct PlaybackBody: Encodable {
         case deviceProfile = "DeviceProfile"
     }
 }
-private struct VLCDeviceProfile: Encodable {
-    let name = "Theatre VLCKit"
+private struct PlaybackDeviceProfile: Encodable {
+    let name: String
     let maxStreamingBitrate = 200_000_000
     let maxStaticBitrate = 200_000_000
     let directPlayProfiles = [DirectProfile()]
-    let transcodingProfiles = [TranscodingProfile()]
-    let subtitleProfiles = [
+    let transcodingProfiles: [TranscodingProfile]
+    let subtitleProfiles: [SubtitleProfile]
+
+    init(nativePlayer: Bool) {
+        name = nativePlayer ? "Theatre Apple Player" : "Theatre VLCKit"
+        transcodingProfiles = [TranscodingProfile(enableSubtitlesInManifest: nativePlayer)]
+        subtitleProfiles = nativePlayer ? [SubtitleProfile(format: "vtt", method: "Hls")] : Self.vlcSubtitles
+    }
+
+    private static let vlcSubtitles = [
         SubtitleProfile(format: "srt", method: "External"),
         SubtitleProfile(format: "subrip", method: "External"),
         SubtitleProfile(format: "ass", method: "External"),
@@ -620,6 +633,7 @@ private struct TranscodingProfile: Encodable {
     let minSegments = 2
     let segmentLength = 4
     let breakOnNonKeyFrames = false
+    let enableSubtitlesInManifest: Bool
 
     enum CodingKeys: String, CodingKey {
         case container = "Container"
@@ -632,6 +646,7 @@ private struct TranscodingProfile: Encodable {
         case minSegments = "MinSegments"
         case segmentLength = "SegmentLength"
         case breakOnNonKeyFrames = "BreakOnNonKeyFrames"
+        case enableSubtitlesInManifest = "EnableSubtitlesInManifest"
     }
 }
 private struct SubtitleProfile: Encodable {

@@ -38,6 +38,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var isConnecting = false
     @Published private(set) var isLoading = false
     @Published private(set) var isStartingPlayback = false
+    @Published private(set) var isPreparingSystemPlayback = false
+    @Published var presentationError: String?
     @Published private(set) var currentVideo: VideoItem?
     @Published private(set) var isVideoFullscreen = false
     @Published var isPlayerWindowKey = false
@@ -49,13 +51,14 @@ final class AppModel: ObservableObject {
     private var stream: PlaybackStream?
     private var connectionTask: Task<Void, Never>?
     private var playbackTask: Task<Void, Never>?
+    private var systemPlaybackTask: Task<Bool, Never>?
+    private var preparedSystemStream: PlaybackStream?
+    private var systemPlaybackGeneration = UUID()
     private var loadGeneration = UUID()
     private var connectionGeneration = UUID()
     private let playbackReporter = PlaybackReporter()
     private var nextVideoOffset = 0
     private var nextResumeOffset = 0
-    private weak var fullscreenWindow: NSWindow?
-    private var windowObservers: [NSObjectProtocol] = []
     private let sessionStore: any SessionStore
     private let defaults: UserDefaults
     private let transport: URLSession
@@ -79,65 +82,45 @@ final class AppModel: ObservableObject {
         } catch { errorMessage = "Your saved sign-in couldn't be restored. Please connect again." }
         playback.onProgress = { [weak self] seconds, paused in self?.reportProgress(seconds: seconds, paused: paused) }
         playback.onEnded = { [weak self] in self?.finishPlayback() }
+        playback.applePlayback.onExternalPlaybackActive = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, await self.prepareSystemPlayback(),
+                    self.playback.applePlayback.player.isExternalPlaybackActive
+                else { return }
+                self.activateSystemPlayback()
+            }
+        }
+        playback.applePlayback.onRestoreWindow = { [weak self] in
+            guard let window = self?.playerWindow?.window, self?.currentVideo != nil else { return false }
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return window.isVisible
+        }
+        playback.applePlayback.onError = { [weak self] in self?.presentationError = $0 }
         playback.onVideoSize = { [weak self] size in
             guard let self, self.stream?.videoAspectRatio == nil else { return }
             self.playerWindow?.fitVideo(aspectRatio: size.width / size.height)
         }
-        windowObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.willEnterFullScreenNotification,
-                object: nil, queue: .main
-            ) { [weak self] note in
-                MainActor.assumeIsolated {
-                    guard let self, self.currentVideo != nil, let window = note.object as? NSWindow,
-                        window === self.playerWindow?.window || window === self.fullscreenWindow
-                    else { return }
-                    self.fullscreenWindow = window
-                    self.isVideoFullscreen = true
-                }
-            })
-        windowObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: NSWindow.didExitFullScreenNotification,
-                object: nil, queue: .main
-            ) { [weak self] note in
-                MainActor.assumeIsolated {
-                    guard let self, let window = note.object as? NSWindow, window === self.fullscreenWindow else {
-                        return
-                    }
-                    self.isVideoFullscreen = false
-                    self.fullscreenWindow = nil
-                }
-            })
     }
 
     deinit {
         connectionTask?.cancel()
         playbackTask?.cancel()
-        windowObservers.forEach(NotificationCenter.default.removeObserver)
+        systemPlaybackTask?.cancel()
     }
 
     func toggleVideoFullscreen() {
         guard currentVideo != nil else { return }
-        if isVideoFullscreen {
-            exitVideoFullscreen()
-            return
-        }
-        guard let window = playerWindow?.window else { return }
-        fullscreenWindow = window
-        isVideoFullscreen = true
-        if !window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
+        playerWindow?.window?.toggleFullScreen(nil)
     }
 
     func exitVideoFullscreen() {
-        guard isVideoFullscreen else { return }
-        if let window = fullscreenWindow, window.styleMask.contains(.fullScreen) {
-            window.toggleFullScreen(nil)
-        } else {
-            isVideoFullscreen = false
-            fullscreenWindow = nil
-        }
+        guard let window = playerWindow?.window, window.styleMask.contains(.fullScreen) else { return }
+        window.toggleFullScreen(nil)
     }
+
+    func playerFullscreenChanged(_ fullscreen: Bool) { isVideoFullscreen = fullscreen }
 
     var displayedUsername: String { client?.session?.username ?? "" }
     var canLoadMore: Bool { nextVideoOffset < totalCount && !isLoading }
@@ -332,6 +315,61 @@ final class AppModel: ObservableObject {
 
     func retryCompatible() { if let currentVideo { play(currentVideo, compatibleOnly: true) } }
 
+    func prepareSystemPlayback(reportErrors: Bool = true) async -> Bool {
+        if playback.usesApplePlayback { return true }
+        if preparedSystemStream != nil, playback.applePlayback.player.currentItem?.status == .readyToPlay {
+            return true
+        }
+        if let systemPlaybackTask { return await systemPlaybackTask.value }
+        guard let client, let video = currentVideo, !isStartingPlayback else { return false }
+        let generation = UUID()
+        systemPlaybackGeneration = generation
+        isPreparingSystemPlayback = true
+        presentationError = nil
+        let task = Task { [self] in
+            defer { if systemPlaybackGeneration == generation { isPreparingSystemPlayback = false } }
+            do {
+                let result = try await client.playback(for: video, nativePlayer: true)
+                _ = try await playback.applePlayback.prepare(url: result.url)
+                try Task.checkCancellation()
+                guard systemPlaybackGeneration == generation, currentVideo?.id == video.id else { return false }
+                preparedSystemStream = result
+                return true
+            } catch {
+                if !Task.isCancelled, systemPlaybackGeneration == generation,
+                    reportErrors || playback.applePlayback.player.isExternalPlaybackActive
+                {
+                    presentationError = Self.friendly(error)
+                }
+                return false
+            }
+        }
+        systemPlaybackTask = task
+        let result = await task.value
+        if systemPlaybackGeneration == generation { systemPlaybackTask = nil }
+        return result
+    }
+
+    private func activateSystemPlayback() {
+        // Preparing the route picker must not interrupt VLC. Handoff happens only
+        // after a receiver connects or the user explicitly requests Picture in Picture.
+        guard !playback.usesApplePlayback, let result = preparedSystemStream,
+            let item = playback.applePlayback.player.currentItem, item.status == .readyToPlay
+        else { return }
+        let position = playback.seconds
+        let wasPlaying = playback.isPlaying
+        finishPlayback()
+        stream = result
+        preparedSystemStream = nil
+        playback.playApple(item, stream: result, at: position, playing: wasPlaying)
+    }
+
+    func togglePictureInPicture() async {
+        guard await prepareSystemPlayback() else { return }
+        activateSystemPlayback()
+        playback.applePlayback.togglePictureInPicture()
+    }
+
     func togglePlayback() {
         if playback.hasEnded, let currentVideo {
             play(currentVideo, startFromBeginning: true)
@@ -341,9 +379,14 @@ final class AppModel: ObservableObject {
     }
 
     func stopPlayback(leaveFullscreen: Bool = true, closeWindow: Bool = true) {
+        systemPlaybackTask?.cancel()
+        systemPlaybackTask = nil
+        preparedSystemStream = nil
+        systemPlaybackGeneration = UUID()
+        isPreparingSystemPlayback = false
+        presentationError = nil
         if leaveFullscreen {
             isVideoFullscreen = false
-            fullscreenWindow = nil
         }
         playbackTask?.cancel()
         playbackTask = nil

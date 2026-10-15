@@ -93,12 +93,6 @@ struct FeaturedRecommendationCarousel: View {
                 move(by: gesture.translation.width < 0 ? 1 : -1)
             }
         )
-        .background {
-            GeometryReader { geometry in
-                FeaturedPointerRegion(onHover: { hovered = $0 }, onSwipe: { move(by: $0) })
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-            }
-        }
         .onChange(of: currentID) { id in
             if let id, let color = colors[id] { onColor(color) }
         }
@@ -163,78 +157,5 @@ struct FeaturedRecommendationCarousel: View {
     private func select(_ position: Int) {
         index = position
         restartClock = UUID()
-    }
-}
-
-/// Observe horizontal trackpad gestures without intercepting vertical page scrolling.
-private struct FeaturedPointerRegion: NSViewRepresentable {
-    let onHover: (Bool) -> Void
-    let onSwipe: (Int) -> Void
-    func makeNSView(context: Context) -> PointerView { PointerView() }
-    func updateNSView(_ view: PointerView, context: Context) {
-        view.onHover = onHover
-        view.onSwipe = onSwipe
-    }
-    static func dismantleNSView(_ view: PointerView, coordinator: ()) { view.removeMonitor() }
-
-    final class PointerView: NSView {
-        var onHover: ((Bool) -> Void)?
-        var onSwipe: ((Int) -> Void)?
-        private var region: NSTrackingArea?
-        private var monitor: Any?
-        private var horizontalDistance: CGFloat = 0
-        private var swipeIssued = false
-        private var lastEventTime: TimeInterval = 0
-
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            removeMonitor()
-            guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .swipe]) { [weak self] event in
-                guard let self, let window = self.window, event.window === window, window.isKeyWindow,
-                    NSApp.isActive, self.visibleRect.contains(self.convert(event.locationInWindow, from: nil)),
-                    window.contentLayoutRect.contains(event.locationInWindow)
-                else { return event }
-                if event.type == .swipe {
-                    guard event.deltaX != 0 else { return event }
-                    self.onSwipe?(event.deltaX < 0 ? 1 : -1)
-                    return nil
-                }
-                if event.phase.contains(.began) || event.timestamp - self.lastEventTime > 0.25 {
-                    self.horizontalDistance = 0
-                    self.swipeIssued = false
-                }
-                self.lastEventTime = event.timestamp
-                guard event.momentumPhase.isEmpty else { return event }
-                let horizontal = event.scrollingDeltaX
-                let vertical = event.scrollingDeltaY
-                guard abs(horizontal) > abs(vertical), horizontal != 0 else { return event }
-                self.horizontalDistance += horizontal
-                if abs(self.horizontalDistance) >= 50, !self.swipeIssued {
-                    self.swipeIssued = true
-                    self.onSwipe?(self.horizontalDistance < 0 ? 1 : -1)
-                }
-                return nil
-            }
-        }
-        override func updateTrackingAreas() {
-            super.updateTrackingAreas()
-            if let region { removeTrackingArea(region) }
-            let tracking = NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect, .enabledDuringMouseDrag],
-                owner: self)
-            addTrackingArea(tracking)
-            region = tracking
-        }
-        override func mouseEntered(with event: NSEvent) { onHover?(true) }
-        override func mouseMoved(with event: NSEvent) { onHover?(true) }
-        override func mouseExited(with event: NSEvent) { onHover?(false) }
-        func removeMonitor() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
-        }
-        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 enum LibraryWindowPhase: Equatable {
@@ -28,7 +29,6 @@ struct LibraryWindowBackground: NSViewRepresentable {
         private var lastPhase = LibraryWindowPhase.windowed
         private var transitionPhase: LibraryWindowPhase?
         private var observers: [NSObjectProtocol] = []
-        private var colorTimer: Timer?
         private var targetColor: NSColor?
 
         override func viewDidMoveToWindow() {
@@ -36,10 +36,9 @@ struct LibraryWindowBackground: NSViewRepresentable {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
             transitionPhase = nil
-            colorTimer?.invalidate()
-            colorTimer = nil
             targetColor = nil
             guard let window else { return }
+            window.animations["backgroundColor"] = CABasicAnimation()
             for name in [
                 NSWindow.willEnterFullScreenNotification,
                 NSWindow.willExitFullScreenNotification,
@@ -90,33 +89,14 @@ struct LibraryWindowBackground: NSViewRepresentable {
             guard targetColor != color else { return }
             let wasConfigured = targetColor != nil
             targetColor = color
-            colorTimer?.invalidate()
-            colorTimer = nil
-            guard animateColor, wasConfigured, window.backgroundColor != color else {
-                window.backgroundColor = color
-                return
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = animateColor && wasConfigured ? 0.65 : 0
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                window.animator().backgroundColor = color
             }
-            let start = window.backgroundColor ?? ArtworkColor.pageBackground
-            let end = color
-            let startedAt = ProcessInfo.processInfo.systemUptime
-            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak window] timer in
-                MainActor.assumeIsolated {
-                    guard let window else {
-                        timer.invalidate()
-                        return
-                    }
-                    let fraction = min(1, (ProcessInfo.processInfo.systemUptime - startedAt) / 0.65)
-                    let eased = fraction * fraction * (3 - 2 * fraction)
-                    window.backgroundColor = start.blended(withFraction: eased, of: end) ?? end
-                    if fraction >= 1 { timer.invalidate() }
-                }
-            }
-            colorTimer = timer
-            RunLoop.main.add(timer, forMode: .common)
         }
 
         deinit {
-            colorTimer?.invalidate()
             observers.forEach(NotificationCenter.default.removeObserver)
         }
     }
