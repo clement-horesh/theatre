@@ -36,6 +36,7 @@ struct MovieDetailView: View {
                                 }
                             }
                         )
+                        .contextMenu { WatchStatusAction(video: video, model: model) }
                         .frame(
                             height: max(500, min(900, max(geometry.size.height * 0.92, geometry.size.width * 9 / 16)))
                                 * 0.9)
@@ -78,7 +79,7 @@ struct MovieDetailView: View {
             }
             if video.type == "Series", !Task.isCancelled {
                 do {
-                    let episodes = try await client.allEpisodes(seriesID: initialVideo.id)
+                    let episodes = try await client.showPlaybackCandidates(seriesID: initialVideo.id)
                     try Task.checkCancellation()
                     showPlayback = ShowPlaybackSelection(episodes: episodes)
                 } catch {

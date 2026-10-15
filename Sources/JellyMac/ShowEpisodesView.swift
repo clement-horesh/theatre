@@ -44,8 +44,9 @@ struct ShowEpisodesView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 18) {
                     ForEach(episodes) { episode in
-                        EpisodeMediaCard(episode: episode, client: model.client, isPreparing: model.isStartingPlayback)
-                        { fromBeginning in
+                        EpisodeMediaCard(
+                            model: model, episode: episode, client: model.client, isPreparing: model.isStartingPlayback
+                        ) { fromBeginning in
                             model.play(episode, startFromBeginning: fromBeginning)
                         }
                         .frame(width: 300, height: 284)

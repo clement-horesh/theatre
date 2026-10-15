@@ -153,8 +153,17 @@ public struct PlaybackStream: Sendable {
     public let playSessionID: String
     public let method: String
     public var externalSubtitles: [PlaybackSubtitle] = []
+    public var mediaTracks: [PlaybackTrack] = []
     public var videoAspectRatio: Double? = nil
     public var resumePositionSeconds: Double = 0
+}
+
+public struct PlaybackTrack: Sendable {
+    public let index: Int
+    public let type: String
+    public let language: String?
+    public let name: String?
+    public let isExternal: Bool
 }
 
 public struct PlaybackSubtitle: Identifiable, Sendable {

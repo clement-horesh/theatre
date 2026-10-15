@@ -110,7 +110,8 @@ struct MovieLibraryView: View {
                         onColor: { featuredColor = Color(nsColor: $0) },
                         onPlay: { video in
                             if video.type == "Series" { path.append(video) } else { model.play(video) }
-                        }
+                        },
+                        onToggleWatched: { video in Task { await model.toggleWatched(video) } }
                     )
                     .frame(height: featureHeight(width: width)).padding(.top, 6)
                 }
@@ -131,6 +132,7 @@ struct MovieLibraryView: View {
                                             ContinueMediaCard(video: video, client: model.client).frame(width: 340)
                                         }
                                         .buttonStyle(.plain)
+                                        .contextMenu { WatchStatusAction(video: video, model: model) }
                                         .disabled(model.isStartingPlayback)
                                         .accessibilityLabel("Resume \(video.title)")
                                         .accessibilityIdentifier("continue-\(video.id)")
@@ -157,6 +159,7 @@ struct MovieLibraryView: View {
                                             ).frame(width: 180)
                                         }
                                         .buttonStyle(.plain)
+                                        .contextMenu { WatchStatusAction(video: video, model: model) }
                                         .accessibilityLabel(
                                             "Details for \(video.title)"
                                                 + (model.progressVideo(for: video).isInProgress
@@ -178,6 +181,7 @@ struct MovieLibraryView: View {
                                     ContinueMediaCard(video: video, client: model.client, showsPlaybackInfo: false)
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu { WatchStatusAction(video: video, model: model) }
                             }
                         }
                     }
@@ -192,6 +196,7 @@ struct MovieLibraryView: View {
                                     video: video, client: model.client, progressVideo: model.progressVideo(for: video))
                             }
                             .buttonStyle(.plain)
+                            .contextMenu { WatchStatusAction(video: video, model: model) }
                             .accessibilityLabel(
                                 "Details for \(video.title)"
                                     + (model.progressVideo(for: video).isInProgress
@@ -209,9 +214,12 @@ struct MovieLibraryView: View {
             .padding(.bottom, isHome ? 64 : 0)
         }
         .overlay {
-            if model.isLoading && model.videos.isEmpty {
+            if model.isLoading && model.videos.isEmpty && (!isHome || !model.search.isEmpty) {
                 ProgressView("Loading library…")
-            } else if !model.isLoading && model.videos.isEmpty && model.errorMessage == nil {
+            } else if !model.isLoading && model.videos.isEmpty && model.errorMessage == nil
+                && (!isHome || !model.search.isEmpty
+                    || (model.recentlyAddedVideos.isEmpty && model.resumeVideos.isEmpty))
+            {
                 VStack(spacing: 12) {
                     Image(systemName: "film").font(.system(size: 34))
                     Text(
@@ -318,7 +326,7 @@ struct MovieLibraryView: View {
     }
 
     private func chooseFeature() {
-        guard showsFeature, !model.isLoading else { return }
+        guard showsFeature else { return }
         var random = SystemRandomNumberGenerator()
         featuredVideos = FeaturedRecommendations.choose(
             recent: model.recentlyAddedVideos,

@@ -2,6 +2,7 @@ import JellyfinKit
 import SwiftUI
 
 struct EpisodeMediaCard: View {
+    @ObservedObject var model: AppModel
     let episode: VideoItem
     let client: JellyfinClient?
     let isPreparing: Bool
@@ -66,6 +67,8 @@ struct EpisodeMediaCard: View {
             Menu {
                 Button(episode.isInProgress ? "Resume" : "Play") { onPlay(false) }
                 if episode.isInProgress { Button("Play from Beginning") { onPlay(true) } }
+                Divider()
+                WatchStatusAction(video: episode, model: model)
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 13, weight: .semibold))
                     .frame(width: 24, height: 24).contentShape(Rectangle())
@@ -74,6 +77,7 @@ struct EpisodeMediaCard: View {
             .disabled(isPreparing).padding(.trailing, 10).padding(.bottom, 14)
             .accessibilityLabel("Playback options for \(episode.name)")
         }
+        .contextMenu { WatchStatusAction(video: episode, model: model) }
         .foregroundStyle(.white)
         .background(Color(white: 0.12))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

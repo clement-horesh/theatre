@@ -37,7 +37,9 @@ struct ShowPlaybackSelection {
         if episode.userData?.played == true {
             title = "Play Again"
         } else {
-            title = ordered.contains { $0.userData?.played == true } ? "Continue" : "Start"
+            title =
+                (ordered.contains { $0.userData?.played == true } || (episode.parentIndexNumber ?? 1) > 1
+                    || (episode.indexNumber ?? 1) > 1) ? "Continue" : "Start"
         }
     }
 }

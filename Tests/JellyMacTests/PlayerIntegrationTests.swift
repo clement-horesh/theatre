@@ -10,7 +10,7 @@ final class PlayerIntegrationTests: XCTestCase {
     private var fixtures: URL { Bundle.module.url(forResource: "Fixtures", withExtension: nil)! }
 
     @MainActor
-    private func signedIn(_ server: LocalDemoServer) async throws -> JellyfinClient {
+    private func signedIn(_ server: PlaybackFixtureServer) async throws -> JellyfinClient {
         let address = try await server.start()
         let api = try JellyfinClient(address: address.absoluteString, deviceID: "player-test")
         let session = try await api.authenticate(username: "demo", password: "demo")
@@ -20,12 +20,12 @@ final class PlayerIntegrationTests: XCTestCase {
     @MainActor
     func testVLCPlaysAllRepresentativeFormatsAndTrackControls() async throws {
         _ = NSApplication.shared
-        let server = LocalDemoServer(mediaDirectory: fixtures)
+        let server = PlaybackFixtureServer(mediaDirectory: fixtures)
         let client = try await signedIn(server)
         defer { server.stop() }
         let page = try await client.videos()
         XCTAssertEqual(page.items.count, 6)
-        let player = VLCPlaybackController()
+        let player = PlaybackController()
         player.setVolume(0)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 260),
@@ -93,11 +93,11 @@ final class PlayerIntegrationTests: XCTestCase {
     @MainActor
     func testVideoLayerFitsAfterRepeatedGrowingAndShrinking() async throws {
         _ = NSApplication.shared
-        let server = LocalDemoServer(mediaDirectory: fixtures)
+        let server = PlaybackFixtureServer(mediaDirectory: fixtures)
         let client = try await signedIn(server)
         defer { server.stop() }
         let page = try await client.videos(search: "h264-aac.mp4")
-        let player = VLCPlaybackController()
+        let player = PlaybackController()
         let surface = VideoSurfaceView(videoView: player.videoView)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 260),
@@ -144,13 +144,13 @@ final class PlayerIntegrationTests: XCTestCase {
 
     @MainActor
     func testVLCResumesAtSavedPositionInsteadOfStartingAtZero() async throws {
-        let server = LocalDemoServer(mediaDirectory: fixtures)
+        let server = PlaybackFixtureServer(mediaDirectory: fixtures)
         let client = try await signedIn(server)
         defer { server.stop() }
         let page = try await client.videos(search: "h264-aac.mp4")
         var stream = try await client.playback(for: XCTUnwrap(page.items.first))
         stream.resumePositionSeconds = 3
-        let player = VLCPlaybackController()
+        let player = PlaybackController()
         player.setVolume(0)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 180),
@@ -177,7 +177,7 @@ final class PlayerIntegrationTests: XCTestCase {
     @MainActor
     func testPlayerOpensItsOwnWindowAndClosingStopsPlayback() async throws {
         _ = NSApplication.shared
-        let server = LocalDemoServer(mediaDirectory: fixtures)
+        let server = PlaybackFixtureServer(mediaDirectory: fixtures)
         let address = try await server.start()
         defer { server.stop() }
         let model = MemorySessionStore().makeModel()
@@ -213,7 +213,8 @@ final class PlayerIntegrationTests: XCTestCase {
     @MainActor
     func testPlayerWindowFitsVideoAndConfiguresNativeAspectConstraint() throws {
         _ = NSApplication.shared
-        let controller = PlayerWindowController(model: MemorySessionStore().makeModel())
+        let model = MemorySessionStore().makeModel()
+        let controller = PlayerWindowController(session: model.playerSession)
         let window = try XCTUnwrap(controller.window)
         defer { controller.closeWithoutCallback() }
         for ratio in [2.4, 4.0 / 3.0, 9.0 / 16.0, 16.0 / 9.0] {

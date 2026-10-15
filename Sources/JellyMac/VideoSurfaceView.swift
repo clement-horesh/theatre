@@ -4,7 +4,7 @@ import SwiftUI
 import VLCKit
 
 struct VLCPlayerView: NSViewRepresentable {
-    let playback: VLCPlaybackController
+    let playback: PlaybackController
     func makeNSView(context: Context) -> VideoSurfaceView { VideoSurfaceView(videoView: playback.videoView) }
     func updateNSView(_ view: VideoSurfaceView, context: Context) { view.needsLayout = true }
 }

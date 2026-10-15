@@ -8,11 +8,23 @@ import VLCKit
 struct PlayerTrack: Identifiable, Equatable {
     let id: Int32
     let name: String
+    var language: String? = nil
+
+    var languageCode: String? {
+        guard let language, !language.isEmpty, language != "und" else { return nil }
+        return Locale.canonicalLanguageIdentifier(from: language).components(separatedBy: "-").first
+    }
+
+    func match(in tracks: [PlayerTrack]) -> PlayerTrack? {
+        tracks.first { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+            ?? tracks.first { languageCode != nil && $0.languageCode == languageCode }
+    }
+
 }
 
 /// Uses VLC for broad-format playback and AVPlayer for native AirPlay routing.
 @MainActor
-final class VLCPlaybackController: ObservableObject {
+final class PlaybackController: ObservableObject {
     let videoView = VLCVideoView(frame: .zero)
     private var engine: VLCMediaPlayer
     let applePlayback = ApplePlaybackController()
@@ -37,6 +49,7 @@ final class VLCPlaybackController: ObservableObject {
     var onVideoSize: ((CGSize) -> Void)?
     private var lastVideoSize = CGSize.zero
     private var pollingTask: Task<Void, Never>?
+    private var endObservation: NSObjectProtocol?
     private var pendingSubtitles: [PlaybackSubtitle] = []
     private var reportedEnd = false
     private var generation = UUID()
@@ -46,13 +59,17 @@ final class VLCPlaybackController: ObservableObject {
     private var pendingResume: Double?
     private let sleepProtection = PlaybackSleepProtection()
     private let defaults: UserDefaults
+    private let preferences: PlaybackPreferences
+    private var needsAudioLanguage = false
+    private var needsSubtitleLanguage = false
     private var currentStream: PlaybackStream?
     private var pendingAudio: Int32?
     private var pendingSubtitle: Int32?
     private var pauseAfterPreparing = false
     private var nativeDuration = 0.0
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, preferences: PlaybackPreferences? = nil) {
+        self.preferences = preferences ?? PlaybackPreferences(defaults: defaults)
         self.defaults = defaults
         let appearance =
             defaults.data(forKey: SubtitleAppearance.defaultsKey)
@@ -65,10 +82,45 @@ final class VLCPlaybackController: ObservableObject {
         engine.scaleFactor = 0
         engine.audio?.volume = 80
         applePlayback.onPictureInPictureChange = { [weak self] in self?.isPictureInPictureActive = $0 }
+        observeEngineEnd()
+    }
+
+    deinit {
+        if let endObservation { NotificationCenter.default.removeObserver(endObservation) }
+    }
+
+    private func observeEngineEnd() {
+        if let endObservation { NotificationCenter.default.removeObserver(endObservation) }
+        endObservation = NotificationCenter.default.addObserver(
+            forName: Notification.Name(VLCMediaPlayerStateChanged), object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.engine.state == .ended else { return }
+                self.playbackEnded()
+            }
+        }
+    }
+
+    private func playbackEnded() {
+        guard !reportedEnd, !isPreparing, currentStream != nil else { return }
+        reportedEnd = true
+        hasEnded = true
+        isPlaying = false
+        seconds = max(seconds, duration)
+        sleepProtection.release()
+        let current = generation
+        // Finish the old engine update before the session starts another video.
+        Task { [weak self] in
+            guard let self, self.generation == current else { return }
+            self.onEnded?()
+        }
     }
 
     private static func makeEngine(appearance: SubtitleAppearance) -> VLCMediaPlayer {
-        VLCMediaPlayer(options: ["--quiet", "--no-video-title-show", "--network-caching=750"] + appearance.vlcOptions)
+        // VLCKit defaults to pausing at EOF, which suppresses the end event.
+        VLCMediaPlayer(
+            options: ["--quiet", "--no-video-title-show", "--network-caching=750", "--no-play-and-pause"]
+                + appearance.vlcOptions)
     }
 
     func play(_ stream: PlaybackStream) {
@@ -77,6 +129,8 @@ final class VLCPlaybackController: ObservableObject {
         errorMessage = nil
         isPreparing = true
         preparationDeadline = Date().addingTimeInterval(45)
+        needsAudioLanguage = true
+        needsSubtitleLanguage = true
         pendingSubtitles = stream.externalSubtitles
         if stream.resumePositionSeconds.isFinite, stream.resumePositionSeconds > 0 {
             pendingResume = stream.resumePositionSeconds
@@ -99,8 +153,8 @@ final class VLCPlaybackController: ObservableObject {
         }
     }
 
-    func stop() {
-        reset(stopApple: true)
+    func stop(preservingApplePlayback: Bool = false) {
+        reset(stopApple: !preservingApplePlayback)
     }
 
     private func reset(stopApple: Bool) {
@@ -110,9 +164,11 @@ final class VLCPlaybackController: ObservableObject {
         pollingTask = nil
         engine.stop()
         engine.media = nil
-        if stopApple { applePlayback.stop() }
-        usesApplePlayback = false
-        isPictureInPictureActive = false
+        if stopApple { applePlayback.stop() } else { applePlayback.player.pause() }
+        if stopApple {
+            usesApplePlayback = false
+            isPictureInPictureActive = false
+        }
         currentStream = nil
         pendingAudio = nil
         pendingSubtitle = nil
@@ -147,6 +203,10 @@ final class VLCPlaybackController: ObservableObject {
         }
         if engine.isPlaying { engine.pause() } else { engine.play() }
         update()
+    }
+
+    func setPlaying(_ playing: Bool) {
+        if playing != isPlaying { togglePlayback() }
     }
 
     func seek(to value: Double) {
@@ -184,7 +244,11 @@ final class VLCPlaybackController: ObservableObject {
         applePlayback.player.volume = Float(volume / 100)
     }
 
-    func selectAudio(_ id: Int32) {
+    func selectAudio(_ id: Int32, remember: Bool = true) {
+        needsAudioLanguage = false
+        if remember, let language = audioTracks.first(where: { $0.id == id })?.languageCode {
+            preferences.audioLanguage = language
+        }
         if usesApplePlayback {
             if let group = applePlayback.audioGroup, group.options.indices.contains(Int(id)) {
                 applePlayback.player.currentItem?.select(group.options[Int(id)], in: group)
@@ -195,7 +259,15 @@ final class VLCPlaybackController: ObservableObject {
         engine.currentAudioTrackIndex = id
         selectedAudio = engine.currentAudioTrackIndex
     }
-    func selectSubtitle(_ id: Int32) {
+    func selectSubtitle(_ id: Int32, remember: Bool = true) {
+        needsSubtitleLanguage = false
+        if remember {
+            if id == -1 {
+                preferences.subtitleLanguage = "off"
+            } else if let language = subtitleTracks.first(where: { $0.id == id })?.languageCode {
+                preferences.subtitleLanguage = language
+            }
+        }
         if usesApplePlayback {
             if let group = applePlayback.subtitleGroup {
                 let option = group.options.indices.contains(Int(id)) ? group.options[Int(id)] : nil
@@ -251,12 +323,7 @@ final class VLCPlaybackController: ObservableObject {
             isPreparing = false
             errorMessage = "VLC couldn't play this stream. Check the file or try Jellyfin's compatible stream."
         case .ended:
-            isPreparing = false
-            hasEnded = true
-            if !reportedEnd {
-                reportedEnd = true
-                onEnded?()
-            }
+            playbackEnded()
         default: break
         }
         if isPreparing && Date() > preparationDeadline {
@@ -269,12 +336,13 @@ final class VLCPlaybackController: ObservableObject {
         if subtitleTracks != subtitles { subtitleTracks = subtitles }
         if selectedAudio != engine.currentAudioTrackIndex { selectedAudio = engine.currentAudioTrackIndex }
         if selectedSubtitle != engine.currentVideoSubTitleIndex { selectedSubtitle = engine.currentVideoSubTitleIndex }
+        if !isPreparing { applyPreferredLanguages() }
         if let id = pendingAudio, audioTracks.contains(where: { $0.id == id }) {
-            selectAudio(id)
+            selectAudio(id, remember: false)
             pendingAudio = nil
         }
         if let id = pendingSubtitle, id == -1 || subtitleTracks.contains(where: { $0.id == id }) {
-            selectSubtitle(id)
+            selectSubtitle(id, remember: false)
             pendingSubtitle = nil
         }
         if pauseAfterPreparing, !isPreparing, pendingResume == nil {
@@ -307,6 +375,7 @@ final class VLCPlaybackController: ObservableObject {
         stop()
         engine.drawable = nil
         engine = Self.makeEngine(appearance: appearance)
+        observeEngineEnd()
         engine.drawable = videoView
         engine.scaleFactor = 0
         engine.audio?.volume = Int32(volume)
@@ -319,17 +388,37 @@ final class VLCPlaybackController: ObservableObject {
         }
     }
 
-    func playApple(_ item: AVPlayerItem, stream: PlaybackStream, at position: Double, playing: Bool) {
+    func playApple(
+        _ item: AVPlayerItem, stream: PlaybackStream, at position: Double, playing: Bool, preserveTracks: Bool = true
+    ) {
+        let audio = preserveTracks ? audioTracks.first { $0.id == selectedAudio } : nil
+        let subtitlesOff = preserveTracks && selectedSubtitle == -1
+        let subtitle = preserveTracks ? subtitleTracks.first { $0.id == selectedSubtitle } : nil
         let previousDuration = duration
         reset(stopApple: false)
         currentStream = stream
         usesApplePlayback = true
         nativeDuration = previousDuration
         audioTracks = (applePlayback.audioGroup?.options ?? []).enumerated().map {
-            PlayerTrack(id: Int32($0.offset), name: $0.element.displayName)
+            PlayerTrack(
+                id: Int32($0.offset), name: $0.element.displayName,
+                language: $0.element.extendedLanguageTag ?? $0.element.locale?.identifier)
         }
         subtitleTracks = (applePlayback.subtitleGroup?.options ?? []).enumerated().map {
-            PlayerTrack(id: Int32($0.offset), name: $0.element.displayName)
+            PlayerTrack(
+                id: Int32($0.offset), name: $0.element.displayName,
+                language: $0.element.extendedLanguageTag ?? $0.element.locale?.identifier)
+        }
+        needsAudioLanguage = true
+        needsSubtitleLanguage = true
+        applyPreferredLanguages()
+        if let audio, let match = audio.match(in: audioTracks) {
+            selectAudio(match.id, remember: false)
+        }
+        if subtitlesOff {
+            selectSubtitle(-1, remember: false)
+        } else if let subtitle, let match = subtitle.match(in: subtitleTracks) {
+            selectSubtitle(match.id, remember: false)
         }
         applePlayback.start(
             item: item, at: position, playing: playing, rate: rate, volume: volume,
@@ -366,20 +455,69 @@ final class VLCPlaybackController: ObservableObject {
             }
         }
         hasEnded = applePlayback.hasEnded
-        if hasEnded && !reportedEnd {
-            reportedEnd = true
-            onEnded?()
-        }
+        if hasEnded { playbackEnded() }
         sleepProtection.update(
             isPlaying: isPlaying && !hasEnded && errorMessage == nil,
             watchingInForeground: NSApp?.isActive == true)
         if isPlaying || seconds > 0 { onProgress?(seconds, !isPlaying) }
     }
 
+    private func applyPreferredLanguages() {
+        func matching(_ code: String, in tracks: [PlayerTrack]) -> PlayerTrack? {
+            guard !code.isEmpty else { return nil }
+            let preferred = PlayerTrack(id: 0, name: "", language: code).languageCode
+            return tracks.first { $0.id >= 0 && $0.languageCode == preferred }
+        }
+        if needsAudioLanguage {
+            if let audio = matching(preferences.audioLanguage, in: audioTracks) {
+                selectAudio(audio.id, remember: false)
+            } else if preferences.audioLanguage.isEmpty {
+                needsAudioLanguage = false
+            }
+        }
+        if needsSubtitleLanguage {
+            if preferences.subtitleLanguage == "off" {
+                selectSubtitle(-1, remember: false)
+            } else if let subtitle = matching(preferences.subtitleLanguage, in: subtitleTracks) {
+                selectSubtitle(subtitle.id, remember: false)
+            } else if preferences.subtitleLanguage.isEmpty {
+                needsSubtitleLanguage = false
+            }
+        }
+    }
+
+    func selectedStreamIndex(type: String) -> Int? {
+        let options = type == "Audio" ? audioTracks : subtitleTracks
+        let selected = type == "Audio" ? selectedAudio : selectedSubtitle
+        if type == "Subtitle", selected == -1 { return -1 }
+        guard let choice = options.first(where: { $0.id == selected }) else { return nil }
+        let source = currentStream?.mediaTracks.filter { $0.type == type } ?? []
+        if let exact = source.first(where: { $0.index == Int(selected) }) { return exact.index }
+        if let named = source.first(where: { $0.name == choice.name }) { return named.index }
+        if let language = choice.languageCode,
+            let matching = source.first(where: {
+                PlayerTrack(id: 0, name: "", language: $0.language).languageCode == language
+            })
+        {
+            return matching.index
+        }
+        if let ordinal = options.filter({ $0.id >= 0 }).firstIndex(where: { $0.id == selected }),
+            source.indices.contains(ordinal)
+        {
+            return source[ordinal].index
+        }
+        return nil
+    }
+
     private func tracks(names: [Any], indexes: [Any]) -> [PlayerTrack] {
-        zip(names, indexes).compactMap { name, index in
+        zip(names, indexes).compactMap { name, index -> PlayerTrack? in
             guard let index = index as? NSNumber, let name = name as? String else { return nil }
-            return PlayerTrack(id: index.int32Value, name: index.int32Value == -1 ? "Off" : name)
+            let info = engine.media?.tracksInformation.compactMap { $0 as? [String: Any] }.first {
+                ($0[VLCMediaTracksInformationId] as? NSNumber)?.int32Value == index.int32Value
+            }
+            return PlayerTrack(
+                id: index.int32Value, name: index.int32Value == -1 ? "Off" : name,
+                language: info?[VLCMediaTracksInformationLanguage] as? String)
         }
     }
 }

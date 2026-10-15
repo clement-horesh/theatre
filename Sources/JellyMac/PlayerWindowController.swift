@@ -3,12 +3,12 @@ import SwiftUI
 
 @MainActor
 final class PlayerWindowController: NSWindowController, NSWindowDelegate {
-    private weak var model: AppModel?
+    private weak var session: PlaybackSession?
     private var videoAspectRatio: CGFloat = 16.0 / 9.0
     private var changingFullscreen = false
 
-    init(model: AppModel) {
-        self.model = model
+    init(session: PlaybackSession) {
+        self.session = session
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -22,8 +22,8 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         let content = NSHostingView(
-            rootView: PlayerPane(model: model, playback: model.playback)
-                .ignoresSafeArea().onExitCommand { model.exitVideoFullscreen() })
+            rootView: PlayerPane(model: session, playback: session.playback)
+                .ignoresSafeArea().onExitCommand { session.exitVideoFullscreen() })
         // The video window owns its size and aspect ratio. SwiftUI must not
         // replace those constraints when its playback view changes.
         content.sizingOptions = []
@@ -62,13 +62,13 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillEnterFullScreen(_ notification: Notification) {
         changingFullscreen = true
-        model?.playerFullscreenChanged(true)
+        session?.playerFullscreenChanged(true)
     }
     func windowDidEnterFullScreen(_ notification: Notification) { changingFullscreen = false }
     func windowWillExitFullScreen(_ notification: Notification) { changingFullscreen = true }
     func windowDidExitFullScreen(_ notification: Notification) {
         changingFullscreen = false
-        model?.playerFullscreenChanged(false)
+        session?.playerFullscreenChanged(false)
         fitVideo(aspectRatio: videoAspectRatio)
     }
 
@@ -77,7 +77,7 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         close()
     }
 
-    func windowWillClose(_ notification: Notification) { model?.playerWindowDidClose() }
-    func windowDidBecomeKey(_ notification: Notification) { model?.isPlayerWindowKey = true }
-    func windowDidResignKey(_ notification: Notification) { model?.isPlayerWindowKey = false }
+    func windowWillClose(_ notification: Notification) { session?.playerWindowDidClose() }
+    func windowDidBecomeKey(_ notification: Notification) { session?.isPlayerWindowKey = true }
+    func windowDidResignKey(_ notification: Notification) { session?.isPlayerWindowKey = false }
 }

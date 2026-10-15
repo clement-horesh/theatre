@@ -24,7 +24,8 @@ final class MemorySessionStore: SessionStore {
 final class SessionTests: XCTestCase {
     @MainActor
     func testSignInSurvivesNewAppModelAndSignOutRemovesSession() async throws {
-        let server = LocalDemoServer(mediaDirectory: Bundle.module.url(forResource: "Fixtures", withExtension: nil)!)
+        let server = PlaybackFixtureServer(
+            mediaDirectory: Bundle.module.url(forResource: "Fixtures", withExtension: nil)!)
         let address = try await server.start()
         defer { server.stop() }
         let store = MemorySessionStore()
@@ -43,10 +44,13 @@ final class SessionTests: XCTestCase {
         let reopened = store.makeModel()
         XCTAssertEqual(reopened.displayedUsername, "demo")
         await reopened.loadVideos()
-        XCTAssertEqual(reopened.videos.count, 6)
-        XCTAssertEqual(reopened.homeRecommendationRevision, 1)
+        XCTAssertTrue(reopened.videos.isEmpty)
+        XCTAssertEqual(reopened.recentlyAddedVideos.count, 6)
+        XCTAssertGreaterThan(reopened.homeRecommendationRevision, 0)
+        let revision = reopened.homeRecommendationRevision
         await reopened.refreshRecentlyAddedTitles()
-        XCTAssertEqual(reopened.homeRecommendationRevision, 1, "Unchanged Home data must not reshuffle the carousel")
+        XCTAssertEqual(
+            reopened.homeRecommendationRevision, revision, "Unchanged Home data must not reshuffle the carousel")
         XCTAssertEqual(reopened.client?.deviceID, original.client?.deviceID)
         reopened.signOut()
         XCTAssertNil(store.saved)
@@ -55,7 +59,8 @@ final class SessionTests: XCTestCase {
 
     @MainActor
     func testExpiredSessionReturnsToLoginButNetworkFailureKeepsSession() async throws {
-        let server = LocalDemoServer(mediaDirectory: Bundle.module.url(forResource: "Fixtures", withExtension: nil)!)
+        let server = PlaybackFixtureServer(
+            mediaDirectory: Bundle.module.url(forResource: "Fixtures", withExtension: nil)!)
         let address = try await server.start()
         let store = MemorySessionStore()
         let api = try JellyfinClient(address: address.absoluteString, deviceID: "session-test")

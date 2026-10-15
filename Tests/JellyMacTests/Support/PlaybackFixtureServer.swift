@@ -3,7 +3,7 @@ import Foundation
 import Network
 
 /// Loopback-only Jellyfin fixture for integration tests; never included in the app.
-final class LocalDemoServer: @unchecked Sendable {
+final class PlaybackFixtureServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "JellyMac.local-demo")
     private let token = UUID().uuidString
     let mediaDirectory: URL
@@ -15,33 +15,13 @@ final class LocalDemoServer: @unchecked Sendable {
         self.mediaDirectory = mediaDirectory
     }
 
-    /// Scan file metadata only; never read entire movies to refresh the library.
-    func librarySignature() async -> String {
-        await withCheckedContinuation { continuation in
-            queue.async { [self] in
-                let signature = catalog().map {
-                    "\($0.id):\($0.size):\($0.modified):\($0.subtitles.map(\.url.path).joined(separator: ","))"
-                }.joined(separator: "|")
-                continuation.resume(returning: signature)
-            }
-        }
-    }
-
     private func catalog() -> [DemoVideo] {
         let root = mediaDirectory.resolvingSymlinksInPath().standardizedFileURL
         let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         guard
-            let enumerator = FileManager.default.enumerator(
-                at: root, includingPropertiesForKeys: keys,
-                options: [.skipsHiddenFiles, .skipsPackageDescendants])
+            let files = try? FileManager.default.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])
         else { return [] }
-        var files: [URL] = []
-        while let file = enumerator.nextObject() as? URL {
-            guard let values = try? file.resourceValues(forKeys: Set(keys)), values.isSymbolicLink != true,
-                values.isRegularFile == true, file.resolvingSymlinksInPath().path.hasPrefix(root.path + "/")
-            else { continue }
-            files.append(file)
-        }
         let subtitleExtensions = Set(["srt", "ass", "ssa", "vtt", "sub"])
         return files.filter { DemoVideo.extensions.contains($0.pathExtension.lowercased()) }.compactMap { file in
             guard let values = try? file.resourceValues(forKeys: Set(keys)), let size = values.fileSize, size > 0 else {
@@ -60,7 +40,7 @@ final class LocalDemoServer: @unchecked Sendable {
             }
             return DemoVideo(
                 id: String(digest.prefix(32)), url: file, size: size,
-                modified: values.contentModificationDate?.timeIntervalSince1970 ?? 0, subtitles: subtitles)
+                subtitles: subtitles)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -370,7 +350,6 @@ private struct DemoVideo {
     let id: String
     let url: URL
     let size: Int
-    let modified: TimeInterval
     let subtitles: [DemoSubtitle]
     static let extensions = Set([
         "mp4", "m4v", "mov", "mkv", "avi", "webm", "ts", "m2ts", "mts", "mpeg", "mpg", "wmv", "asf", "flv", "ogv",

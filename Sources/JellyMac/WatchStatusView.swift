@@ -45,3 +45,14 @@ struct WatchProgressStrip: View {
         .accessibilityLabel("In progress, \(video.progressLabel) remaining")
     }
 }
+
+struct WatchStatusAction: View {
+    let video: VideoItem
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Button(video.userData?.played == true ? "Mark as Unwatched" : "Mark as Watched") {
+            Task { await model.toggleWatched(video) }
+        }
+    }
+}

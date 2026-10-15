@@ -8,7 +8,7 @@ struct JellyMacApp: App {
 
     var body: some Scene {
         WindowGroup("Theatre") {
-            ContentView(model: model).frame(minWidth: 900, minHeight: 580)
+            ContentView(model: model).onAppear { delegate.model = model }.frame(minWidth: 900, minHeight: 580)
                 .preferredColorScheme(.dark)
                 .modifier(PageFullscreenNavigation())
         }
@@ -36,6 +36,9 @@ struct JellyMacApp: App {
                 .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
             }
         }
+        Settings {
+            PlaybackSettingsView(preferences: model.preferences).preferredColorScheme(.dark)
+        }
         Window("Jellyfin Informations", id: "jellyfin-information") {
             JellyfinInformationView(model: model)
                 .preferredColorScheme(.dark)
@@ -49,11 +52,10 @@ private struct JellyfinCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
-        CommandGroup(replacing: .appSettings) {
+        CommandGroup(after: .appSettings) {
             Button("Jellyfin Informations…") {
                 openWindow(id: "jellyfin-information")
             }
-            .keyboardShortcut(",", modifiers: .command)
             Divider()
             Button("Refresh Library") {
                 Task { await model.loadVideos() }
@@ -66,7 +68,34 @@ private struct JellyfinCommands: Commands {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+    private var terminationPending = false
+    private var terminationTimeout: Task<Void, Never>?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
+        Task {
+            await model.playerSession.shutdown()
+            finishTermination(sender)
+        }
+        terminationTimeout = Task {
+            do { try await Task.sleep(nanoseconds: 3_000_000_000) } catch { return }
+            finishTermination(sender)
+        }
+        return .terminateLater
+    }
+
+    private func finishTermination(_ application: NSApplication) {
+        guard terminationPending else { return }
+        terminationPending = false
+        terminationTimeout?.cancel()
+        application.reply(toApplicationShouldTerminate: true)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = NSAppearance(named: .darkAqua)
         NSApp.setActivationPolicy(.regular)

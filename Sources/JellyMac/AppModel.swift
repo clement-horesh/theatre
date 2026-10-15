@@ -37,26 +37,28 @@ final class AppModel: ObservableObject {
     @Published private(set) var totalCount = 0
     @Published private(set) var isConnecting = false
     @Published private(set) var isLoading = false
-    @Published private(set) var isStartingPlayback = false
-    @Published private(set) var isPreparingSystemPlayback = false
-    @Published var presentationError: String?
-    @Published private(set) var currentVideo: VideoItem?
-    @Published private(set) var isVideoFullscreen = false
-    @Published var isPlayerWindowKey = false
     @Published var errorMessage: String?
-    @Published private(set) var playbackError: String?
-    let playback = VLCPlaybackController()
+    let playerSession: PlaybackSession
+    let preferences: PlaybackPreferences
+    private var playbackObservation: AnyCancellable?
+    var playback: PlaybackController { playerSession.playback }
+    var currentVideo: VideoItem? { playerSession.currentVideo }
+    var isStartingPlayback: Bool { playerSession.isStartingPlayback }
+    var isPreparingSystemPlayback: Bool { playerSession.isPreparingSystemPlayback }
+    var isVideoFullscreen: Bool { playerSession.isVideoFullscreen }
+    var playbackError: String? { playerSession.playbackError }
+    var isPlayerWindowKey: Bool {
+        get { playerSession.isPlayerWindowKey }
+        set { playerSession.isPlayerWindowKey = newValue }
+    }
+    var presentationError: String? {
+        get { playerSession.presentationError }
+        set { playerSession.presentationError = newValue }
+    }
 
-    private var playerWindow: PlayerWindowController?
-    private var stream: PlaybackStream?
     private var connectionTask: Task<Void, Never>?
-    private var playbackTask: Task<Void, Never>?
-    private var systemPlaybackTask: Task<Bool, Never>?
-    private var preparedSystemStream: PlaybackStream?
-    private var systemPlaybackGeneration = UUID()
     private var loadGeneration = UUID()
     private var connectionGeneration = UUID()
-    private let playbackReporter = PlaybackReporter()
     private var nextVideoOffset = 0
     private var nextResumeOffset = 0
     private let sessionStore: any SessionStore
@@ -67,6 +69,8 @@ final class AppModel: ObservableObject {
         sessionStore: (any SessionStore)? = nil, defaults: UserDefaults = .standard,
         transport: URLSession? = nil
     ) {
+        preferences = PlaybackPreferences(defaults: defaults)
+        playerSession = PlaybackSession(preferences: preferences)
         self.defaults = defaults
         self.transport = transport ?? Self.makeTransport()
         self.sessionStore = sessionStore ?? KeychainSessionStore(defaults: defaults)
@@ -80,48 +84,20 @@ final class AppModel: ObservableObject {
                 username = saved.session.username
             }
         } catch { errorMessage = "Your saved sign-in couldn't be restored. Please connect again." }
-        playback.onProgress = { [weak self] seconds, paused in self?.reportProgress(seconds: seconds, paused: paused) }
-        playback.onEnded = { [weak self] in self?.finishPlayback() }
-        playback.applePlayback.onExternalPlaybackActive = { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self, await self.prepareSystemPlayback(),
-                    self.playback.applePlayback.player.isExternalPlaybackActive
-                else { return }
-                self.activateSystemPlayback()
-            }
+        playerSession.client = client
+        playerSession.onStopped = { [weak self] client, itemID in
+            Task { await self?.refreshPlayedItem(client: client, itemID: itemID) }
         }
-        playback.applePlayback.onRestoreWindow = { [weak self] in
-            guard let window = self?.playerWindow?.window, self?.currentVideo != nil else { return false }
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            return window.isVisible
-        }
-        playback.applePlayback.onError = { [weak self] in self?.presentationError = $0 }
-        playback.onVideoSize = { [weak self] size in
-            guard let self, self.stream?.videoAspectRatio == nil else { return }
-            self.playerWindow?.fitVideo(aspectRatio: size.width / size.height)
-        }
+        playbackObservation = playerSession.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     deinit {
         connectionTask?.cancel()
-        playbackTask?.cancel()
-        systemPlaybackTask?.cancel()
     }
 
-    func toggleVideoFullscreen() {
-        guard currentVideo != nil else { return }
-        playerWindow?.window?.toggleFullScreen(nil)
-    }
-
-    func exitVideoFullscreen() {
-        guard let window = playerWindow?.window, window.styleMask.contains(.fullScreen) else { return }
-        window.toggleFullScreen(nil)
-    }
-
-    func playerFullscreenChanged(_ fullscreen: Bool) { isVideoFullscreen = fullscreen }
-
+    func toggleVideoFullscreen() { playerSession.toggleVideoFullscreen() }
+    func exitVideoFullscreen() { playerSession.exitVideoFullscreen() }
+    func playerFullscreenChanged(_ fullscreen: Bool) { playerSession.playerFullscreenChanged(fullscreen) }
     var displayedUsername: String { client?.session?.username ?? "" }
     var canLoadMore: Bool { nextVideoOffset < totalCount && !isLoading }
     var canLoadMoreResume: Bool { nextResumeOffset < resumeTotalCount }
@@ -159,6 +135,7 @@ final class AppModel: ObservableObject {
                 try Task.checkCancellation()
                 guard connectionGeneration == generation else { return }
                 client = try unauthenticated.authenticated(with: session)
+                playerSession.client = client
                 do {
                     try sessionStore.save(
                         SavedSession(
@@ -200,31 +177,24 @@ final class AppModel: ObservableObject {
             isLoadingResume = false
         }
         do {
-            let page = try await client.videos(startIndex: nextVideoOffset, search: query, itemTypes: section.itemTypes)
-            try Task.checkCancellation()
-            guard isCurrentLoad(generation, section: section, query: query) else { return }
-            nextVideoOffset = page.items.isEmpty ? page.totalCount : nextVideoOffset + page.items.count
-            var ids = Set(videos.map(\.id))
-            videos.append(contentsOf: page.items.filter { ids.insert($0.id).inserted })
-            totalCount = page.totalCount
-            if reset, section != .movies {
-                let resume = try? await client.resumeVideos()
+            if section == .home, query.isEmpty {
+                // Home has its own feeds; it doesn't need the general catalog page.
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await self.loadHomeResume(client: client, generation: generation) }
+                    group.addTask { await self.loadHomeRecent(client: client, generation: generation) }
+                    group.addTask { await self.loadHomeMovies(client: client, generation: generation) }
+                }
+            } else {
+                let page = try await client.videos(
+                    startIndex: nextVideoOffset, search: query, itemTypes: section.itemTypes)
                 try Task.checkCancellation()
                 guard isCurrentLoad(generation, section: section, query: query) else { return }
-                resumeVideos = resume?.items ?? page.items.filter(\.isInProgress)
-                resumeTotalCount = resume?.totalCount ?? resumeVideos.count
-                nextResumeOffset = resume?.items.count ?? resumeVideos.count
+                nextVideoOffset = page.items.isEmpty ? page.totalCount : nextVideoOffset + page.items.count
+                var ids = Set(videos.map(\.id))
+                videos.append(contentsOf: page.items.filter { ids.insert($0.id).inserted })
+                totalCount = page.totalCount
             }
-            if reset, section == .home, query.isEmpty {
-                async let recentPage = client.recentlyAddedTitles(limit: 30)
-                async let continuePage = client.resumeVideos(limit: 5, itemTypes: ["Movie"])
-                let recent = try await recentPage
-                let continuing = try? await continuePage
-                try Task.checkCancellation()
-                guard isCurrentLoad(generation, section: section, query: query) else { return }
-                recentlyAddedVideos = recent
-                recentContinueMovies = continuing?.items ?? Array(resumeVideos.filter { $0.type == "Movie" }.prefix(5))
-            }
+
         } catch is CancellationError {
         } catch {
             if !Task.isCancelled, isCurrentLoad(generation, section: section, query: query) {
@@ -239,6 +209,52 @@ final class AppModel: ObservableObject {
         if isCurrentLoad(generation, section: section, query: query), !Task.isCancelled {
             if reset, section == .home, query.isEmpty { homeRecommendationRevision += 1 }
         }
+    }
+
+    private func loadHomeResume(client: JellyfinClient, generation: UUID) async {
+        do {
+            let page = try await client.resumeVideos()
+            guard !Task.isCancelled, isCurrentLoad(generation, section: .home, query: "") else { return }
+            resumeVideos = page.items
+            resumeTotalCount = page.totalCount
+            nextResumeOffset = page.items.count
+        } catch { homeLoadFailed(error, generation: generation) }
+    }
+
+    private func loadHomeRecent(client: JellyfinClient, generation: UUID) async {
+        do {
+            let items = try await client.recentlyAddedTitles(limit: 30)
+            guard !Task.isCancelled, isCurrentLoad(generation, section: .home, query: "") else { return }
+            recentlyAddedVideos = items
+            homeRecommendationRevision += 1
+        } catch { homeLoadFailed(error, generation: generation) }
+    }
+
+    private func loadHomeMovies(client: JellyfinClient, generation: UUID) async {
+        do {
+            let page = try await client.resumeVideos(limit: 5, itemTypes: ["Movie"])
+            guard !Task.isCancelled, isCurrentLoad(generation, section: .home, query: "") else { return }
+            recentContinueMovies = page.items
+            homeRecommendationRevision += 1
+        } catch { homeLoadFailed(error, generation: generation) }
+    }
+
+    private func homeLoadFailed(_ error: Error, generation: UUID) {
+        guard !Task.isCancelled, isCurrentLoad(generation, section: .home, query: "") else { return }
+        if case JellyfinError.unauthorized = error {
+            signOut()
+            errorMessage = "Your Jellyfin session expired. Please sign in again."
+        } else {
+            errorMessage = Self.friendly(error)
+        }
+    }
+
+    func toggleWatched(_ video: VideoItem) async {
+        guard let client else { return }
+        do {
+            try await client.setWatched(video.userData?.played != true, itemID: video.id)
+            await refreshPlayedItem(client: client, itemID: video.id)
+        } catch { errorMessage = Self.friendly(error) }
     }
 
     private func isCurrentLoad(_ generation: UUID, section: LibrarySection, query: String) -> Bool {
@@ -284,131 +300,12 @@ final class AppModel: ObservableObject {
     }
 
     func play(_ video: VideoItem, compatibleOnly: Bool = false, startFromBeginning: Bool = false) {
-        guard let client else { return }
-        stopPlayback(leaveFullscreen: false, closeWindow: false)
-        currentVideo = video
-        isStartingPlayback = true
-        playbackTask = Task { [self] in
-            do {
-                var result = try await client.playback(for: video, compatibleOnly: compatibleOnly)
-                try Task.checkCancellation()
-                if startFromBeginning { result.resumePositionSeconds = 0 }
-                stream = result
-                showPlayer(for: video, aspectRatio: result.videoAspectRatio)
-                playback.play(result)
-                isStartingPlayback = false
-            } catch is CancellationError {
-            } catch {
-                guard !Task.isCancelled else { return }
-                isStartingPlayback = false
-                playbackError = Self.friendly(error)
-                showPlayer(for: video, aspectRatio: nil)
-            }
-        }
+        playerSession.play(video, compatibleOnly: compatibleOnly, startFromBeginning: startFromBeginning)
     }
-
-    private func showPlayer(for video: VideoItem, aspectRatio: Double?) {
-        if playerWindow == nil { playerWindow = PlayerWindowController(model: self) }
-        playerWindow?.fitVideo(aspectRatio: aspectRatio ?? 16.0 / 9.0)
-        playerWindow?.show(title: video.name)
-    }
-
-    func retryCompatible() { if let currentVideo { play(currentVideo, compatibleOnly: true) } }
-
-    func prepareSystemPlayback(reportErrors: Bool = true) async -> Bool {
-        if playback.usesApplePlayback { return true }
-        if preparedSystemStream != nil, playback.applePlayback.player.currentItem?.status == .readyToPlay {
-            return true
-        }
-        if let systemPlaybackTask { return await systemPlaybackTask.value }
-        guard let client, let video = currentVideo, !isStartingPlayback else { return false }
-        let generation = UUID()
-        systemPlaybackGeneration = generation
-        isPreparingSystemPlayback = true
-        presentationError = nil
-        let task = Task { [self] in
-            defer { if systemPlaybackGeneration == generation { isPreparingSystemPlayback = false } }
-            do {
-                let result = try await client.playback(for: video, nativePlayer: true)
-                _ = try await playback.applePlayback.prepare(url: result.url)
-                try Task.checkCancellation()
-                guard systemPlaybackGeneration == generation, currentVideo?.id == video.id else { return false }
-                preparedSystemStream = result
-                return true
-            } catch {
-                if !Task.isCancelled, systemPlaybackGeneration == generation,
-                    reportErrors || playback.applePlayback.player.isExternalPlaybackActive
-                {
-                    presentationError = Self.friendly(error)
-                }
-                return false
-            }
-        }
-        systemPlaybackTask = task
-        let result = await task.value
-        if systemPlaybackGeneration == generation { systemPlaybackTask = nil }
-        return result
-    }
-
-    private func activateSystemPlayback() {
-        // Preparing the route picker must not interrupt VLC. Handoff happens only
-        // after a receiver connects or the user explicitly requests Picture in Picture.
-        guard !playback.usesApplePlayback, let result = preparedSystemStream,
-            let item = playback.applePlayback.player.currentItem, item.status == .readyToPlay
-        else { return }
-        let position = playback.seconds
-        let wasPlaying = playback.isPlaying
-        finishPlayback()
-        stream = result
-        preparedSystemStream = nil
-        playback.playApple(item, stream: result, at: position, playing: wasPlaying)
-    }
-
-    func togglePictureInPicture() async {
-        guard await prepareSystemPlayback() else { return }
-        activateSystemPlayback()
-        playback.applePlayback.togglePictureInPicture()
-    }
-
-    func togglePlayback() {
-        if playback.hasEnded, let currentVideo {
-            play(currentVideo, startFromBeginning: true)
-        } else {
-            playback.togglePlayback()
-        }
-    }
-
+    func togglePlayback() { playerSession.togglePlayback() }
     func stopPlayback(leaveFullscreen: Bool = true, closeWindow: Bool = true) {
-        systemPlaybackTask?.cancel()
-        systemPlaybackTask = nil
-        preparedSystemStream = nil
-        systemPlaybackGeneration = UUID()
-        isPreparingSystemPlayback = false
-        presentationError = nil
-        if leaveFullscreen {
-            isVideoFullscreen = false
-        }
-        playbackTask?.cancel()
-        playbackTask = nil
-        finishPlayback()
-        playback.stop()
-        currentVideo = nil
-        playbackError = nil
-        isStartingPlayback = false
-        if closeWindow {
-            let controller = playerWindow
-            playerWindow = nil
-            isPlayerWindowKey = false
-            controller?.closeWithoutCallback()
-        }
+        playerSession.stopPlayback(leaveFullscreen: leaveFullscreen, closeWindow: closeWindow)
     }
-
-    func playerWindowDidClose() {
-        stopPlayback(closeWindow: false)
-        playerWindow = nil
-        isPlayerWindowKey = false
-    }
-
     func signOut() {
         try? sessionStore.remove()
         stopPlayback()
@@ -417,6 +314,7 @@ final class AppModel: ObservableObject {
         loadGeneration = UUID()
         let previous = client
         client = nil
+        playerSession.client = nil
         videos = []
         resumeVideos = []
         recentlyAddedVideos = []
@@ -435,61 +333,48 @@ final class AppModel: ObservableObject {
         librarySection = .home
         ArtworkCache.shared.clear()
         address = defaults.string(forKey: "serverAddress") ?? ""
-        let pendingReport = playbackReporter.pendingTask
+        let pendingReport = playerSession.pendingReport
         Task {
             _ = try? await pendingReport?.value
             try? await previous?.logout()
         }
     }
 
-    private func reportProgress(seconds: Double, paused: Bool) {
-        guard let client, let stream else { return }
-        _ = playbackReporter.progress(client: client, stream: stream, seconds: seconds, paused: paused)
-    }
-
-    private func finishPlayback() {
-        guard let client, let stream else { return }
-        let seconds = playback.seconds
-        self.stream = nil
-        let report = playbackReporter.stop(client: client, stream: stream, seconds: seconds)
-        Task {
-            do {
-                try await report.value
-                guard self.client?.session?.accessToken == client.session?.accessToken else { return }
-                let updated = try await client.item(id: stream.itemID)
+    private func refreshPlayedItem(client: JellyfinClient, itemID: String) async {
+        do {
+            guard self.client?.session?.accessToken == client.session?.accessToken else { return }
+            let updated = try await client.item(id: itemID)
+            guard self.client?.session?.accessToken == client.session?.accessToken
+            else { return }
+            if let index = videos.firstIndex(where: { $0.id == updated.id }) { videos[index] = updated }
+            if let index = recentlyAddedVideos.firstIndex(where: { $0.id == updated.id }) {
+                recentlyAddedVideos[index] = updated
+            }
+            if updated.type == "Episode", let seriesID = updated.seriesID,
+                let show = try? await client.item(id: seriesID)
+            {
                 guard self.client?.session?.accessToken == client.session?.accessToken
                 else { return }
-                if let index = videos.firstIndex(where: { $0.id == updated.id }) { videos[index] = updated }
-                if let index = recentlyAddedVideos.firstIndex(where: { $0.id == updated.id }) {
-                    recentlyAddedVideos[index] = updated
+                if let index = videos.firstIndex(where: { $0.id == seriesID }) { videos[index] = show }
+                if let index = recentlyAddedVideos.firstIndex(where: { $0.id == seriesID }) {
+                    recentlyAddedVideos[index] = show
                 }
-                if updated.type == "Episode", let seriesID = updated.seriesID,
-                    let show = try? await client.item(id: seriesID)
-                {
-                    guard self.client?.session?.accessToken == client.session?.accessToken
-                    else { return }
-                    if let index = videos.firstIndex(where: { $0.id == seriesID }) { videos[index] = show }
-                    if let index = recentlyAddedVideos.firstIndex(where: { $0.id == seriesID }) {
-                        recentlyAddedVideos[index] = show
-                    }
-                }
-                if librarySection != .movies, let resume = try? await client.resumeVideos() {
-                    guard self.client?.session?.accessToken == client.session?.accessToken
-                    else { return }
-                    resumeVideos = resume.items
-                    resumeTotalCount = resume.totalCount
-                    nextResumeOffset = resume.items.count
-                }
-                if librarySection == .home, let movies = try? await client.resumeVideos(limit: 5, itemTypes: ["Movie"])
-                {
-                    guard self.client?.session?.accessToken == client.session?.accessToken
-                    else { return }
-                    recentContinueMovies = movies.items
-                }
-                playbackRevision += 1
-            } catch {
-                // Leave the last server-confirmed state visible until a refresh.
             }
+            if let resume = try? await client.resumeVideos() {
+                guard self.client?.session?.accessToken == client.session?.accessToken
+                else { return }
+                resumeVideos = resume.items
+                resumeTotalCount = resume.totalCount
+                nextResumeOffset = resume.items.count
+            }
+            if librarySection == .home, let movies = try? await client.resumeVideos(limit: 5, itemTypes: ["Movie"]) {
+                guard self.client?.session?.accessToken == client.session?.accessToken
+                else { return }
+                recentContinueMovies = movies.items
+            }
+            playbackRevision += 1
+        } catch {
+            // Keep the last server-confirmed state until the next refresh.
         }
     }
 

@@ -9,6 +9,7 @@ struct FeaturedRecommendationCarousel: View {
     let isActive: Bool
     let onColor: (NSColor) -> Void
     let onPlay: (VideoItem) -> Void
+    let onToggleWatched: (VideoItem) -> Void
     @State private var index = 0
     @State private var hovered = false
     @State private var restartClock = UUID()
@@ -34,6 +35,11 @@ struct FeaturedRecommendationCarousel: View {
                         })
                 }
                 .buttonStyle(.plain).accessibilityIdentifier("featuredMedia")
+                .contextMenu {
+                    Button(video.userData?.played == true ? "Mark as Unwatched" : "Mark as Watched") {
+                        onToggleWatched(video)
+                    }
+                }
                 .id(video.id)
                 .transition(.opacity)
                 VStack {

@@ -3,8 +3,8 @@ import AppKit
 import SwiftUI
 
 struct PlayerPane: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var playback: VLCPlaybackController
+    @ObservedObject var model: PlaybackSession
+    @ObservedObject var playback: PlaybackController
     @StateObject private var chrome = PlayerChromeState()
     @State private var scrubSeconds = 0.0
     @State private var isScrubbing = false
@@ -31,6 +31,18 @@ struct PlayerPane: View {
                 .allowsHitTesting(chrome.isVisible)
                 .accessibilityHidden(!chrome.isVisible)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: chrome.isVisible)
+            if model.offersNextEpisode {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        GlassPlayButton(resume: false, disabled: model.isStartingPlayback, title: "Next Episode") {
+                            model.playNextEpisode()
+                        }
+                    }
+                }
+                .padding(.trailing, 24).padding(.bottom, 90)
+            }
             if model.isStartingPlayback || playback.isPreparing {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -188,7 +200,10 @@ struct PlayerPane: View {
             AirPlayPicker(
                 player: playback.applePlayback.player,
                 onPrepare: { Task { _ = await model.prepareSystemPlayback(reportErrors: false) } },
-                onTracking: menuTracking
+                onTracking: { active in
+                    menuTracking(active)
+                    model.routePickerTracking(active)
+                }
             )
             .frame(width: 30, height: 28)
             .overlay {

@@ -226,43 +226,49 @@ final class JellyfinClientTests: XCTestCase {
         } catch JellyfinError.unauthorized {}
     }
 
-    func testShowPlayTargetLoadsAllSeasonsAndPagesWithUserProgress() async throws {
-        var offsets: [String] = []
+    func testShowPlayTargetUsesLatestResumableEpisodeWithoutLoadingAllEpisodes() async throws {
+        var requests = 0
         StubProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/jellyfin/Shows/show/Episodes")
+            requests += 1
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
-            XCTAssertNil(query.first { $0.name == "seasonId" })
-            XCTAssertEqual(query.first { $0.name == "userId" }?.value, "user-1")
-            XCTAssertEqual(query.first { $0.name == "enableUserData" }?.value, "true")
-            XCTAssertEqual(query.first { $0.name == "isMissing" }?.value, "false")
-            let offset = query.first { $0.name == "startIndex" }!.value!
-            offsets.append(offset)
-            if offset == "0" {
-                return (
-                    200,
-                    #"{"Items":[{"Id":"one","Name":"One","Type":"Episode","UserData":{"Played":true}},{"Id":"two","Name":"Two","Type":"Episode"}],"TotalRecordCount":4}"#
-                )
-            }
+            XCTAssertEqual(request.url?.path, "/jellyfin/Items")
+            XCTAssertEqual(query.first { $0.name == "parentId" }?.value, "show")
+            XCTAssertEqual(query.first { $0.name == "filters" }?.value, "IsResumable")
+            XCTAssertEqual(query.first { $0.name == "sortBy" }?.value, "DatePlayed,ParentIndexNumber,IndexNumber")
+            XCTAssertEqual(query.first { $0.name == "sortOrder" }?.value, "Descending,Ascending,Ascending")
+            XCTAssertEqual(query.first { $0.name == "limit" }?.value, "1")
             return (
                 200,
-                #"{"Items":[{"Id":"two","Name":"Two","Type":"Episode"},{"Id":"later-season","Name":"Later","Type":"Episode","ParentIndexNumber":2,"UserData":{"PlaybackPositionTicks":100000000,"LastPlayedDate":"2026-10-14T18:00:00Z"}}],"TotalRecordCount":4}"#
+                #"{"Items":[{"Id":"later-season","Name":"Later","Type":"Episode","UserData":{"PlaybackPositionTicks":100000000}}],"TotalRecordCount":40}"#
             )
         }
-        let items = try await client().allEpisodes(seriesID: "show")
-        XCTAssertEqual(offsets, ["0", "2"])
-        XCTAssertEqual(items.map(\.id), ["one", "two", "later-season"])
-        XCTAssertEqual(items.last?.resumePositionSeconds, 10)
+        let items = try await client().showPlaybackCandidates(seriesID: "show")
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(items.first?.resumePositionSeconds, 10)
     }
 
-    func testEmptyShowStopsPagingEvenIfCountChangedDuringTheRequest() async throws {
-        var requests = 0
-        StubProtocol.handler = { _ in
-            requests += 1
-            return (200, #"{"Items":[],"TotalRecordCount":100}"#)
+    func testShowPlayTargetUsesServerNextUpAndNextEpisodeCrossesSeasons() async throws {
+        StubProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/Items") { return (200, #"{"Items":[],"TotalRecordCount":0}"#) }
+            if request.url!.path.hasSuffix("/NextUp") {
+                return (
+                    200,
+                    #"{"Items":[{"Id":"next","Name":"Next","Type":"Episode","ParentIndexNumber":2,"IndexNumber":1}],"TotalRecordCount":1}"#
+                )
+            }
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertEqual(query.first { $0.name == "startItemId" }?.value, "current")
+            XCTAssertEqual(query.first { $0.name == "limit" }?.value, "2")
+            return (
+                200, #"{"Items":[{"Id":"current","Name":"Current"},{"Id":"next","Name":"Next"}],"TotalRecordCount":2}"#
+            )
         }
-        let items = try await client().allEpisodes(seriesID: "show")
-        XCTAssertTrue(items.isEmpty)
-        XCTAssertEqual(requests, 1)
+        let items = try await client().showPlaybackCandidates(seriesID: "show")
+        XCTAssertEqual(items.first?.id, "next")
+        let episode = try JSONDecoder().decode(
+            VideoItem.self, from: Data(#"{"Id":"current","Name":"Current","Type":"Episode","SeriesId":"show"}"#.utf8))
+        let next = try await client().nextEpisode(after: episode)
+        XCTAssertEqual(next?.id, "next")
     }
 
     func testMovieDetailLoadsMetadataAndArtworkForCurrentUser() async throws {
@@ -453,10 +459,10 @@ final class JellyfinClientTests: XCTestCase {
     func testSystemPlaybackRequestsH264AACAndSelectableHLSSubtitles() async throws {
         StubProtocol.handler = { request in
             let body = try StubProtocol.body(request)
-            XCTAssertEqual(body["EnableDirectPlay"] as? Bool, false)
-            XCTAssertEqual(body["EnableDirectStream"] as? Bool, false)
-            XCTAssertEqual(body["AllowVideoStreamCopy"] as? Bool, false)
-            XCTAssertEqual(body["AllowAudioStreamCopy"] as? Bool, false)
+            XCTAssertEqual(body["EnableDirectPlay"] as? Bool, true)
+            XCTAssertEqual(body["EnableDirectStream"] as? Bool, true)
+            XCTAssertEqual(body["AllowVideoStreamCopy"] as? Bool, true)
+            XCTAssertEqual(body["AllowAudioStreamCopy"] as? Bool, true)
             let profile = try XCTUnwrap(body["DeviceProfile"] as? [String: Any])
             let transcode = try XCTUnwrap((profile["TranscodingProfiles"] as? [[String: Any]])?.first)
             XCTAssertEqual(transcode["VideoCodec"] as? String, "h264")
@@ -472,6 +478,63 @@ final class JellyfinClientTests: XCTestCase {
         let stream = try await client().playback(for: video(), nativePlayer: true)
         XCTAssertEqual(stream.method, "Transcode")
         XCTAssertEqual(stream.url.path, "/jellyfin/Videos/video-1/master.m3u8")
+    }
+
+    func testCreditMarkersAreServerProvidedAndOlderServersCanOmitThem() async throws {
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/jellyfin/MediaSegments/video-1")
+            return (
+                200,
+                #"{"Items":[{"Type":"Intro","StartTicks":10000000},{"Type":"Outro","StartTicks":600000000}],"TotalRecordCount":2}"#
+            )
+        }
+        let start = try await client().creditsStart(itemID: "video-1")
+        XCTAssertEqual(start, 60)
+        StubProtocol.handler = { _ in (404, "") }
+        let absent = try await client().creditsStart(itemID: "video-1")
+        XCTAssertNil(absent)
+    }
+
+    func testWatchStatusAndUnusedEncodingCleanupUseAuthenticatedScopedRequests() async throws {
+        var methods: [String] = []
+        StubProtocol.handler = { request in
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.contains("Token=") == true)
+            methods.append(request.httpMethod ?? "")
+            if request.url!.path.hasSuffix("ActiveEncodings") {
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertEqual(query.first { $0.name == "playSessionId" }?.value, "encoding-to-stop")
+                XCTAssertNotNil(query.first { $0.name == "deviceId" })
+            } else {
+                XCTAssertEqual(request.url!.path, "/jellyfin/UserPlayedItems/video-1")
+            }
+            return (204, "")
+        }
+        let client = try client()
+        try await client.setWatched(true, itemID: "video-1")
+        try await client.setWatched(false, itemID: "video-1")
+        let stream = PlaybackStream(
+            url: URL(string: "https://example.test")!, itemID: "video-1", mediaSourceID: "source",
+            playSessionID: "encoding-to-stop", method: "Transcode")
+        try await client.stopEncoding(stream)
+        XCTAssertEqual(methods, ["POST", "DELETE", "DELETE"])
+    }
+
+    func testNativeNegotiationPreservesTheSourceAndSelectedTrackIndexes() async throws {
+        StubProtocol.handler = { request in
+            let body = try StubProtocol.body(request)
+            XCTAssertEqual(body["MediaSourceId"] as? String, "selected-version")
+            XCTAssertEqual(body["AudioStreamIndex"] as? Int, 3)
+            XCTAssertEqual(body["SubtitleStreamIndex"] as? Int, -1)
+            XCTAssertEqual(body["EnableDirectPlay"] as? Bool, true)
+            return (
+                200,
+                #"{"MediaSources":[{"Id":"selected-version","Container":"mp4","SupportsDirectPlay":true}],"PlaySessionId":"native"}"#
+            )
+        }
+        let stream = try await client().playback(
+            for: video(), nativePlayer: true, mediaSourceID: "selected-version", audioStreamIndex: 3,
+            subtitleStreamIndex: -1)
+        XCTAssertEqual(stream.method, "DirectPlay")
     }
 
     func testRejectsStreamingTokenLeakToAnotherServer() async throws {
