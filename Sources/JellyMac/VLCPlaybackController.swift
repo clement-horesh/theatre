@@ -67,8 +67,7 @@ final class VLCPlaybackController: ObservableObject {
             while !Task.isCancelled {
                 guard let self, self.generation == current else { return }
                 self.update()
-                do { try await Task.sleep(nanoseconds: 250_000_000) }
-                catch { return }
+                do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
             }
         }
     }
@@ -76,15 +75,26 @@ final class VLCPlaybackController: ObservableObject {
     func stop() {
         sleepProtection.release()
         generation = UUID()
-        pollingTask?.cancel(); pollingTask = nil
+        pollingTask?.cancel()
+        pollingTask = nil
         engine.stop()
         engine.media = nil
-        isPlaying = false; isPreparing = false; seconds = 0; duration = 0; canSeek = false
-        audioTracks = []; subtitleTracks = []; selectedAudio = -1; selectedSubtitle = -1
+        isPlaying = false
+        isPreparing = false
+        seconds = 0
+        duration = 0
+        canSeek = false
+        audioTracks = []
+        subtitleTracks = []
+        selectedAudio = -1
+        selectedSubtitle = -1
         pendingSeek = nil
         pendingResume = nil
         lastVideoSize = .zero
-        pendingSubtitles = []; errorMessage = nil; reportedEnd = false; hasEnded = false
+        pendingSubtitles = []
+        errorMessage = nil
+        reportedEnd = false
+        hasEnded = false
     }
 
     func togglePlayback() {
@@ -93,7 +103,7 @@ final class VLCPlaybackController: ObservableObject {
     }
 
     func seek(to value: Double) {
-        guard canSeek, duration > 0 else { return }
+        guard value.isFinite, canSeek, duration > 0 else { return }
         let destination = max(0, min(value, duration - 0.05))
         pendingSeek = (destination, Date().addingTimeInterval(3))
         engine.time = VLCTime(number: NSNumber(value: Int64(destination * 1000)))
@@ -107,17 +117,25 @@ final class VLCPlaybackController: ObservableObject {
     func seek(by interval: Double) { seek(to: seconds + interval) }
 
     func setRate(_ value: Double) {
+        guard value.isFinite else { return }
         rate = max(0.5, min(2, value))
         engine.rate = Float(rate)
     }
 
     func setVolume(_ value: Double) {
+        guard value.isFinite else { return }
         volume = max(0, min(100, value))
         engine.audio?.volume = Int32(volume)
     }
 
-    func selectAudio(_ id: Int32) { engine.currentAudioTrackIndex = id; selectedAudio = engine.currentAudioTrackIndex }
-    func selectSubtitle(_ id: Int32) { engine.currentVideoSubTitleIndex = id; selectedSubtitle = engine.currentVideoSubTitleIndex }
+    func selectAudio(_ id: Int32) {
+        engine.currentAudioTrackIndex = id
+        selectedAudio = engine.currentAudioTrackIndex
+    }
+    func selectSubtitle(_ id: Int32) {
+        engine.currentVideoSubTitleIndex = id
+        selectedSubtitle = engine.currentVideoSubTitleIndex
+    }
 
     private func update() {
         let size = engine.videoSize
@@ -130,8 +148,12 @@ final class VLCPlaybackController: ObservableObject {
             if engine.isPlaying && (abs(engineSeconds - seek.target) < 0.15 || Date() > seek.deadline) {
                 pendingSeek = nil
                 seconds = engineSeconds
-            } else { seconds = seek.target }
-        } else { seconds = engineSeconds }
+            } else {
+                seconds = seek.target
+            }
+        } else {
+            seconds = engineSeconds
+        }
         duration = max(0, (engine.media?.length.value?.doubleValue ?? 0) / 1000)
         canSeek = engine.isSeekable
         isPlaying = engine.isPlaying
@@ -156,7 +178,10 @@ final class VLCPlaybackController: ObservableObject {
         case .ended:
             isPreparing = false
             hasEnded = true
-            if !reportedEnd { reportedEnd = true; onEnded?() }
+            if !reportedEnd {
+                reportedEnd = true
+                onEnded?()
+            }
         default: break
         }
         if isPreparing && Date() > preparationDeadline {
@@ -170,9 +195,10 @@ final class VLCPlaybackController: ObservableObject {
         if selectedAudio != engine.currentAudioTrackIndex { selectedAudio = engine.currentAudioTrackIndex }
         if selectedSubtitle != engine.currentVideoSubTitleIndex { selectedSubtitle = engine.currentVideoSubTitleIndex }
         let window = videoView.window
-        sleepProtection.update(isPlaying: isPlaying && !hasEnded && errorMessage == nil,
-                               watchingInForeground: NSApp.isActive && window?.isVisible == true && window?.isMiniaturized == false)
-        if seconds > 0 { onProgress?(seconds, !isPlaying) }
+        sleepProtection.update(
+            isPlaying: isPlaying && !hasEnded && errorMessage == nil,
+            watchingInForeground: NSApp.isActive && window?.isVisible == true && window?.isMiniaturized == false)
+        if isPlaying || seconds > 0 { onProgress?(seconds, !isPlaying) }
     }
 
     private func tracks(names: [Any], indexes: [Any]) -> [PlayerTrack] {

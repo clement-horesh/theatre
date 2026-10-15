@@ -1,17 +1,20 @@
 import Foundation
 import JellyfinKit
 import XCTest
+
 @testable import JellyMac
 
 final class FeaturedRecommendationsTests: XCTestCase {
     func testOnlyTenNewestAdditionsAndFiveLatestContinueMoviesAreEligible() throws {
         let recent = try (0..<14).map { try item("recent-\($0)", played: true) }
         let resume = try (0..<8).reversed().map {
-            try item("resume-\($0)", position: 200_000_000,
-                     lastPlayed: "2026-10-\(String(format: "%02d", $0 + 1))T12:00:00Z")
+            try item(
+                "resume-\($0)", position: 200_000_000,
+                lastPlayed: "2026-10-\(String(format: "%02d", $0 + 1))T12:00:00Z")
         }
-        let episode = try item("episode", type: "Episode", position: 200_000_000,
-                               lastPlayed: "2026-10-15T12:00:00Z")
+        let episode = try item(
+            "episode", type: "Episode", position: 200_000_000,
+            lastPlayed: "2026-10-15T12:00:00Z")
         let pool = FeaturedRecommendations.candidates(recent: recent, continuing: resume + [episode])
         XCTAssertEqual(Set(pool.map(\.id)), Set(recent.prefix(10).map(\.id) + (3..<8).map { "resume-\($0)" }))
     }
@@ -32,20 +35,24 @@ final class FeaturedRecommendationsTests: XCTestCase {
         let recent = try item("overlap", played: false)
         let resumed = try item("overlap", position: 200_000_000)
         var random = SeededRandom(state: 42)
-        let selection = FeaturedRecommendations.choose(recent: [recent, recent], continuing: [resumed, resumed], using: &random)
+        let selection = FeaturedRecommendations.choose(
+            recent: [recent, recent], continuing: [resumed, resumed], using: &random)
         XCTAssertEqual(selection.count, 1)
         XCTAssertTrue(try XCTUnwrap(selection.first).isInProgress)
     }
 
     func testFiveDistinctRandomChoicesAndSmallOrEmptyLibraries() throws {
         let recent = try (0..<10).map { try item("item-\($0)", played: false) }
-        var firstRandom = SeededRandom(state: 1), secondRandom = SeededRandom(state: 2)
+        var firstRandom = SeededRandom(state: 1)
+        var secondRandom = SeededRandom(state: 2)
         let first = FeaturedRecommendations.choose(recent: recent, continuing: [], using: &firstRandom)
         let second = FeaturedRecommendations.choose(recent: recent, continuing: [], using: &secondRandom)
         XCTAssertEqual(first.count, 5)
         XCTAssertEqual(Set(first.map(\.id)).count, 5)
         XCTAssertNotEqual(first.map(\.id), second.map(\.id))
-        XCTAssertEqual(FeaturedRecommendations.choose(recent: Array(recent.prefix(2)), continuing: [], using: &firstRandom).count, 2)
+        XCTAssertEqual(
+            FeaturedRecommendations.choose(recent: Array(recent.prefix(2)), continuing: [], using: &firstRandom).count,
+            2)
         XCTAssertTrue(FeaturedRecommendations.choose(recent: [], continuing: [], using: &firstRandom).isEmpty)
     }
 
@@ -61,19 +68,24 @@ final class FeaturedRecommendationsTests: XCTestCase {
         let show = try item("show", type: "Series")
         let movie = try item("movie")
         var random = SeededRandom(state: 42)
-        let selection = FeaturedRecommendations.choose(recent: episodes + [show, show, movie], continuing: [], using: &random)
+        let selection = FeaturedRecommendations.choose(
+            recent: episodes + [show, show, movie], continuing: [], using: &random)
         XCTAssertEqual(selection.count, 2)
         XCTAssertEqual(selection.filter { $0.type == "Series" && $0.id == "show" }.count, 1)
         XCTAssertFalse(selection.contains { $0.type == "Episode" })
         XCTAssertTrue(selection.contains { $0.id == "movie" })
     }
 
-    private func item(_ id: String, type: String = "Movie", played: Bool = false,
-                      position: Int64 = 0, lastPlayed: String? = nil, seriesID: String? = nil) throws -> VideoItem {
+    private func item(
+        _ id: String, type: String = "Movie", played: Bool = false,
+        position: Int64 = 0, lastPlayed: String? = nil, seriesID: String? = nil
+    ) throws -> VideoItem {
         var user: [String: Any] = ["Played": played, "PlaybackPositionTicks": position]
         if let lastPlayed { user["LastPlayedDate"] = lastPlayed }
-        var json: [String: Any] = ["Id": id, "Name": id, "Type": type,
-                                   "RunTimeTicks": Int64(36_000_000_000), "UserData": user]
+        var json: [String: Any] = [
+            "Id": id, "Name": id, "Type": type,
+            "RunTimeTicks": Int64(36_000_000_000), "UserData": user,
+        ]
         if let seriesID { json["SeriesId"] = seriesID }
         return try JSONDecoder().decode(VideoItem.self, from: JSONSerialization.data(withJSONObject: json))
     }
@@ -81,7 +93,7 @@ final class FeaturedRecommendationsTests: XCTestCase {
     private struct SeededRandom: RandomNumberGenerator {
         var state: UInt64
         mutating func next() -> UInt64 {
-            state = state &* 6364136223846793005 &+ 1442695040888963407
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
             return state
         }
     }

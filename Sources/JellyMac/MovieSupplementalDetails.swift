@@ -17,7 +17,8 @@ struct MovieCastSection: View {
                                 JellyfinArtwork(request: try? client?.imageRequest(for: person)) {
                                     ZStack {
                                         Color(white: 0.17)
-                                        Image(systemName: "person.fill").font(.system(size: 42)).foregroundStyle(.white.opacity(0.4))
+                                        Image(systemName: "person.fill").font(.system(size: 42)).foregroundStyle(
+                                            .white.opacity(0.4))
                                     }
                                 }
                                 .frame(width: portraitSize, height: portraitSize).clipShape(Circle())
@@ -52,7 +53,8 @@ struct MovieAboutSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(video.name).font(.title2.weight(.semibold))
                 if let genres = video.genres, !genres.isEmpty {
-                    Text(genres.joined(separator: ", ").uppercased()).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    Text(genres.joined(separator: ", ").uppercased()).font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
                 }
                 Text(video.overview.flatMap { $0.isEmpty ? nil : $0 } ?? "No description available.")
                     .font(.system(size: 14)).foregroundStyle(.white.opacity(0.75)).lineSpacing(3)
@@ -72,34 +74,54 @@ struct MovieInformationSection: View {
     private var subtitles: [VideoDetailStream] { video.detailStreams.filter { $0.type == "Subtitle" } }
 
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 32, alignment: .topLeading), count: width >= 920 ? 3 : 2),
-                  alignment: .leading, spacing: 32) {
+        LazyVGrid(
+            columns: Array(
+                repeating: GridItem(.flexible(), spacing: 32, alignment: .topLeading), count: width >= 920 ? 3 : 2),
+            alignment: .leading, spacing: 32
+        ) {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Information").font(.title2.weight(.semibold))
-                if let year = video.productionYear { field("Released", String(year)) }
-                else if let premiere = video.premiereDate { field("Released", String(premiere.prefix(4))) }
+                if let year = video.productionYear {
+                    field("Released", String(year))
+                } else if let premiere = video.premiereDate {
+                    field("Released", String(premiere.prefix(4)))
+                }
                 if let runtime = video.runtimeLabel { field("Run Time", runtime) }
                 if let rating = video.officialRating, !rating.isEmpty { field("Rated", rating) }
-                if let locations = video.productionLocations, !locations.isEmpty { field("Region of Origin", locations.joined(separator: ", ")) }
-                if let studios = video.studios, !studios.isEmpty { field("Studio", studios.map(\.name).joined(separator: ", ")) }
+                if let locations = video.productionLocations, !locations.isEmpty {
+                    field("Region of Origin", locations.joined(separator: ", "))
+                }
+                if let studios = video.studios, !studios.isEmpty {
+                    field("Studio", studios.map(\.name).joined(separator: ", "))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             VStack(alignment: .leading, spacing: 20) {
                 Text("Languages").font(.title2.weight(.semibold))
-                if let original = audio.first(where: { $0.isOriginal == true })?.languageName { field("Original Audio", original) }
+                if let original = audio.first(where: { $0.isOriginal == true })?.languageName {
+                    field("Original Audio", original)
+                }
                 if !audio.isEmpty { field("Audio", labels(audio)) }
                 if !subtitles.isEmpty { field("Subtitles", labels(subtitles)) }
-                if audio.isEmpty && subtitles.isEmpty { Text("No language information available.").foregroundStyle(.secondary) }
+                if audio.isEmpty && subtitles.isEmpty {
+                    Text("No language information available.").foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             VStack(alignment: .leading, spacing: 20) {
                 Text("Accessibility").font(.title2.weight(.semibold))
                 if subtitles.contains(where: \.hasSDH) {
-                    accessibility("SDH", "Includes subtitles with dialogue and relevant sound information for viewers who are deaf or hard of hearing.")
+                    accessibility(
+                        "SDH",
+                        "Includes subtitles with dialogue and relevant sound information for viewers who are deaf or hard of hearing."
+                    )
                 }
                 if subtitles.contains(where: \.hasCC) { accessibility("CC", "Closed captions are available.") }
                 if audio.contains(where: \.hasAudioDescription) {
-                    accessibility("AD", "Includes an audio track describing on-screen action for viewers who are blind or have low vision.")
+                    accessibility(
+                        "AD",
+                        "Includes an audio track describing on-screen action for viewers who are blind or have low vision."
+                    )
                 }
                 if !video.detailStreams.contains(where: { $0.hasSDH || $0.hasCC || $0.hasAudioDescription }) {
                     Text("No accessibility information available.").foregroundStyle(.secondary)

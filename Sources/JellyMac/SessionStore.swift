@@ -26,8 +26,10 @@ final class KeychainSessionStore: SessionStore {
         self.defaults = defaults
     }
     private var query: [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service, kSecAttrAccount as String: "current-session"]
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service, kSecAttrAccount as String: "current-session",
+        ]
     }
 
     func load() throws -> SavedSession? {
@@ -52,7 +54,9 @@ final class KeychainSessionStore: SessionStore {
             item[kSecValueData as String] = data
             item[kSecAttrLabel as String] = "Theatre Jellyfin sign-in"
             try check(SecItemAdd(item as CFDictionary, nil))
-        } else { try check(code) }
+        } else {
+            try check(code)
+        }
         defaults.set(false, forKey: signOutKey)
     }
 

@@ -7,25 +7,51 @@ final class ArtworkCache {
     static let shared = ArtworkCache()
     private let images = NSCache<NSString, NSImage>()
     private let session: URLSession
+    private var pending: [NSString: Task<Data?, Error>] = [:]
+    private var generation = UUID()
 
-    private init() {
+    init(session: URLSession? = nil) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpMaximumConnectionsPerHost = 6
-        session = URLSession(configuration: configuration)
+        self.session = session ?? URLSession(configuration: configuration)
         images.totalCostLimit = 80 * 1024 * 1024
     }
 
     func image(for request: URLRequest) async throws -> NSImage? {
-        let key = "\(request.url?.absoluteString ?? ""):\(request.value(forHTTPHeaderField: "Authorization") ?? "")" as NSString
+        let key =
+            "\(request.url?.absoluteString ?? ""):\(request.value(forHTTPHeaderField: "Authorization") ?? "")"
+            as NSString
         if let image = images.object(forKey: key) { return image }
-        let (data, response) = try await session.data(for: request)
-        try Task.checkCancellation()
-        guard (response as? HTTPURLResponse)?.statusCode == 200, let image = NSImage(data: data) else { return nil }
+        // Several cards and carousel prefetching can request the same artwork.
+        // Share the download without cancelling it when just one view disappears.
+        let generation = generation
+        let task: Task<Data?, Error>
+        if let existing = pending[key] {
+            task = existing
+        } else {
+            task = Task { [session] in
+                let (data, response) = try await session.data(for: request)
+                try Task.checkCancellation()
+                guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+                return data
+            }
+            pending[key] = task
+        }
+        defer { if self.generation == generation { pending[key] = nil } }
+        let data = try await task.value
+        guard self.generation == generation else { throw CancellationError() }
+        if let image = images.object(forKey: key) { return image }
+        guard let data, let image = NSImage(data: data) else { return nil }
         images.setObject(image, forKey: key, cost: max(data.count, Int(image.size.width * image.size.height * 4)))
         return image
     }
 
-    func clear() { images.removeAllObjects() }
+    func clear() {
+        generation = UUID()
+        for task in pending.values { task.cancel() }
+        pending.removeAll()
+        images.removeAllObjects()
+    }
 }
 
 struct JellyfinArtwork<Placeholder: View>: View {
@@ -40,21 +66,26 @@ struct JellyfinArtwork<Placeholder: View>: View {
     var body: some View {
         Group {
             if let image {
-                if fit { Image(nsImage: image).resizable().scaledToFit() }
-                else if progressBlurHeight > 0 {
+                if fit {
+                    Image(nsImage: image).resizable().scaledToFit()
+                } else if progressBlurHeight > 0 {
                     ProgressBlurArtwork(image: image, fadeHeight: progressBlurHeight, radius: progressBlurRadius)
+                } else {
+                    Image(nsImage: image).resizable().scaledToFill()
                 }
-                else { Image(nsImage: image).resizable().scaledToFill() }
-            } else { placeholder() }
+            } else {
+                placeholder()
+            }
         }
         .task(id: request) {
             image = nil
             guard let request else { return }
             do {
-                image = try await ArtworkCache.shared.image(for: request)
-                if let image, !Task.isCancelled { onImageLoaded?(image) }
-            }
-            catch { if !Task.isCancelled { image = nil } }
+                let result = try await ArtworkCache.shared.image(for: request)
+                try Task.checkCancellation()
+                image = result
+                if let result { onImageLoaded?(result) }
+            } catch { if !Task.isCancelled { image = nil } }
         }
     }
 }
@@ -76,10 +107,12 @@ private struct ProgressBlurArtwork: View {
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .blur(radius: radius, opaque: true)
                             .mask(alignment: .bottom) {
-                                LinearGradient(stops: [
-                                    .init(color: .clear, location: 0),
-                                    .init(color: .black, location: 0.55)
-                                ], startPoint: .top, endPoint: .bottom)
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .clear, location: 0),
+                                        .init(color: .black, location: 0.55),
+                                    ], startPoint: .top, endPoint: .bottom
+                                )
                                 .frame(height: min(fadeHeight, geometry.size.height))
                             }
                     }

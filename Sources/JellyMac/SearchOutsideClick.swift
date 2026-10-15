@@ -28,8 +28,10 @@ struct SearchOutsideClick: NSViewRepresentable {
                 }
                 return event
             }
-            observer = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
-                                                              object: window, queue: .main) { [weak self] _ in
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResignKeyNotification,
+                object: window, queue: .main
+            ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.onDismiss?() }
             }
         }
@@ -37,7 +39,8 @@ struct SearchOutsideClick: NSViewRepresentable {
         func stopObserving() {
             if let monitor { NSEvent.removeMonitor(monitor) }
             if let observer { NotificationCenter.default.removeObserver(observer) }
-            monitor = nil; observer = nil
+            monitor = nil
+            observer = nil
         }
 
         deinit {

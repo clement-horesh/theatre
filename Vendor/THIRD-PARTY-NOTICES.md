@@ -1,13 +1,13 @@
 # Third-party software
 
-JellyMac embeds the unmodified official VideoLAN **VLCKit 3.7.2** macOS binary framework,
+Theatre embeds the unmodified official VideoLAN **VLCKit 3.7.2** macOS binary framework,
 including libVLC and its included components. It provides the media decoder and renderer.
 
 VLCKit is distributed under LGPL version 2.1 or later. Its license is included as
 `VLCKit-COPYING.txt` next to this notice in the app's Resources directory. Copyright
 and license headers for the public API are retained in the embedded framework.
 The framework is dynamically linked and can be replaced by a compatible framework
-with the app re-signed for local execution. JellyMac makes no changes to its source.
+with the app re-signed for local execution. Theatre makes no changes to its source.
 
 Project and corresponding source: https://code.videolan.org/videolan/VLCKit
 Official source mirror: https://github.com/videolan/vlckit

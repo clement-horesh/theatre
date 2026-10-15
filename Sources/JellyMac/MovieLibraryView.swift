@@ -14,7 +14,9 @@ struct MovieLibraryView: View {
 
     private var isHome: Bool { model.librarySection == .home }
     private var showsFeature: Bool { model.librarySection == .home && model.search.isEmpty }
-    private var refreshesHome: Bool { showsFeature && path.isEmpty && scenePhase == .active && !model.isPlayerWindowKey }
+    private var refreshesHome: Bool {
+        showsFeature && path.isEmpty && scenePhase == .active && !model.isPlayerWindowKey
+    }
     private func featureHeight(width: CGFloat) -> CGFloat { min(680, max(340, (width - 48) / 2.33)) }
 
     var body: some View {
@@ -46,24 +48,30 @@ struct MovieLibraryView: View {
             }
             .toolbarBackground(.hidden, for: .windowToolbar)
             .background {
-                LibraryWindowBackground(color: showsFeature && path.isEmpty
-                    ? ArtworkColor.pageBackground.blended(withFraction: 0.8, of: NSColor(featuredColor)) ?? ArtworkColor.pageBackground
-                    : ArtworkColor.pageBackground, animateColor: !reduceMotion, onPhase: { phase in
+                LibraryWindowBackground(
+                    color: showsFeature && path.isEmpty
+                        ? ArtworkColor.pageBackground.blended(withFraction: 0.8, of: NSColor(featuredColor))
+                            ?? ArtworkColor.pageBackground
+                        : ArtworkColor.pageBackground, animateColor: !reduceMotion,
+                    onPhase: { phase in
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) { windowPhase = phase }
-                    })
+                    }
+                )
                 .frame(width: 0, height: 0)
             }
             .background {
                 ZStack(alignment: .top) {
                     Color(nsColor: ArtworkColor.pageBackground)
                     if showsFeature && path.isEmpty {
-                        LinearGradient(stops: [
-                            .init(color: featuredColor.opacity(0.8), location: 0),
-                            .init(color: featuredColor.opacity(0.35), location: 0.5),
-                            .init(color: Color(nsColor: ArtworkColor.pageBackground), location: 1)
-                        ], startPoint: .top, endPoint: .bottom)
+                        LinearGradient(
+                            stops: [
+                                .init(color: featuredColor.opacity(0.8), location: 0),
+                                .init(color: featuredColor.opacity(0.35), location: 0.5),
+                                .init(color: Color(nsColor: ArtworkColor.pageBackground), location: 1),
+                            ], startPoint: .top, endPoint: .bottom
+                        )
                         .frame(height: featureHeight(width: geometry.size.width) + 120)
                     }
                 }
@@ -84,8 +92,7 @@ struct MovieLibraryView: View {
             .task(id: "\(model.client?.session?.userID ?? ""):\(refreshesHome)") {
                 guard refreshesHome else { return }
                 while !Task.isCancelled {
-                    do { try await Task.sleep(nanoseconds: 60_000_000_000) }
-                    catch { return }
+                    do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { return }
                     guard !Task.isCancelled, refreshesHome else { return }
                     await model.refreshRecentlyAddedTitles()
                 }
@@ -97,30 +104,38 @@ struct MovieLibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 if showsFeature, !featuredVideos.isEmpty {
-                    FeaturedRecommendationCarousel(videos: featuredVideos, client: model.client,
+                    FeaturedRecommendationCarousel(
+                        videos: featuredVideos, client: model.client,
                         isPreparing: model.isStartingPlayback, isActive: path.isEmpty && !model.isPlayerWindowKey,
-                        onColor: { featuredColor = Color(nsColor: $0) }, onPlay: { video in
-                            if video.type == "Series" { path.append(video) }
-                            else { model.play(video) }
-                        })
-                        .frame(height: featureHeight(width: width)).padding(.top, 6)
+                        onColor: { featuredColor = Color(nsColor: $0) },
+                        onPlay: { video in
+                            if video.type == "Series" { path.append(video) } else { model.play(video) }
+                        }
+                    )
+                    .frame(height: featureHeight(width: width)).padding(.top, 6)
                 }
                 if isHome {
                     if model.search.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Continue").font(.title2.weight(.semibold))
                             if model.resumeVideos.isEmpty && !model.isLoading {
-                                Text("Your unfinished movies and episodes will appear here.").foregroundStyle(.secondary)
+                                Text("Your unfinished movies and episodes will appear here.").foregroundStyle(
+                                    .secondary)
                             }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 LazyHStack(spacing: 18) {
                                     ForEach(model.resumeVideos) { video in
-                                        NavigationLink(value: video) {
+                                        Button {
+                                            model.play(video)
+                                        } label: {
                                             ContinueMediaCard(video: video, client: model.client).frame(width: 340)
                                         }
-                                        .buttonStyle(.plain).accessibilityIdentifier("continue-\(video.id)")
+                                        .buttonStyle(.plain)
+                                        .disabled(model.isStartingPlayback)
+                                        .accessibilityLabel("Resume \(video.title)")
+                                        .accessibilityIdentifier("continue-\(video.id)")
                                     }
-                                    if model.resumeVideos.count < model.resumeTotalCount {
+                                    if model.canLoadMoreResume {
                                         Button("Load more") { Task { await model.loadMoreResumeVideos() } }
                                             .disabled(model.isLoadingResume).padding(20)
                                     }
@@ -136,10 +151,17 @@ struct MovieLibraryView: View {
                                 LazyHStack(alignment: .top, spacing: 24) {
                                     ForEach(model.recentlyAddedVideos) { video in
                                         NavigationLink(value: video) {
-                                            MoviePoster(video: video, client: model.client, progressVideo: model.progressVideo(for: video)).frame(width: 180)
+                                            MoviePoster(
+                                                video: video, client: model.client,
+                                                progressVideo: model.progressVideo(for: video)
+                                            ).frame(width: 180)
                                         }
                                         .buttonStyle(.plain)
-                                        .accessibilityLabel("Details for \(video.title)" + (model.progressVideo(for: video).isInProgress ? ", In progress" : (video.isUnwatched ? ", Unwatched" : "")))
+                                        .accessibilityLabel(
+                                            "Details for \(video.title)"
+                                                + (model.progressVideo(for: video).isInProgress
+                                                    ? ", In progress" : (video.isUnwatched ? ", Unwatched" : ""))
+                                        )
                                         .accessibilityIdentifier("recent-\(video.id)")
                                     }
                                 }
@@ -149,22 +171,31 @@ struct MovieLibraryView: View {
                         }
                         .padding(.top, 14)
                     } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 380), spacing: 18)], spacing: 18) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 380), spacing: 18)], spacing: 18)
+                        {
                             ForEach(model.videos) { video in
-                                NavigationLink(value: video) { ContinueMediaCard(video: video, client: model.client, showsPlaybackInfo: false) }
-                                    .buttonStyle(.plain)
+                                NavigationLink(value: video) {
+                                    ContinueMediaCard(video: video, client: model.client, showsPlaybackInfo: false)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 24, alignment: .top)],
-                              alignment: .leading, spacing: 26) {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 24, alignment: .top)],
+                        alignment: .leading, spacing: 26
+                    ) {
                         ForEach(model.videos) { video in
                             NavigationLink(value: video) {
-                                MoviePoster(video: video, client: model.client, progressVideo: model.progressVideo(for: video))
+                                MoviePoster(
+                                    video: video, client: model.client, progressVideo: model.progressVideo(for: video))
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Details for \(video.title)" + (model.progressVideo(for: video).isInProgress ? ", In progress" : (video.isUnwatched ? ", Unwatched" : "")))
+                            .accessibilityLabel(
+                                "Details for \(video.title)"
+                                    + (model.progressVideo(for: video).isInProgress
+                                        ? ", In progress" : (video.isUnwatched ? ", Unwatched" : "")))
                         }
                     }
                 }
@@ -178,11 +209,16 @@ struct MovieLibraryView: View {
             .padding(.bottom, isHome ? 64 : 0)
         }
         .overlay {
-            if model.isLoading && model.videos.isEmpty { ProgressView("Loading library…") }
-            else if !model.isLoading && model.videos.isEmpty && model.errorMessage == nil {
+            if model.isLoading && model.videos.isEmpty {
+                ProgressView("Loading library…")
+            } else if !model.isLoading && model.videos.isEmpty && model.errorMessage == nil {
                 VStack(spacing: 12) {
                     Image(systemName: "film").font(.system(size: 34))
-                    Text(model.search.isEmpty ? "No \(model.librarySection == .home ? "videos" : model.librarySection.rawValue.lowercased()) in this library" : "No matching titles").font(.headline)
+                    Text(
+                        model.search.isEmpty
+                            ? "No \(model.librarySection == .home ? "videos" : model.librarySection.rawValue.lowercased()) in this library"
+                            : "No matching titles"
+                    ).font(.headline)
                 }
                 .foregroundStyle(.secondary)
             }
@@ -226,16 +262,10 @@ struct MovieLibraryView: View {
             path.removeLast()
             closeSearch()
         } label: {
-            let icon = Image(systemName: "chevron.backward").font(.system(size: 13, weight: .semibold))
+            Image(systemName: "chevron.backward").font(.system(size: 13, weight: .semibold))
                 .frame(width: 32, height: 32)
-            Group {
-                if #available(macOS 26.0, *) {
-                    icon.glassEffect(.regular.interactive(), in: Circle())
-                } else {
-                    icon.background(.ultraThinMaterial, in: Circle())
-                }
-            }
-            .contentShape(Circle())
+                .glassSurface(in: Circle(), interactive: true)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Back").help("Back")
@@ -244,9 +274,10 @@ struct MovieLibraryView: View {
     private var libraryNavigation: some View {
         HStack(spacing: 8) {
             Button {
-                if showsSearch { closeSearch() }
-                else { showsSearch = true }
-            } label: { Image(systemName: "magnifyingglass").padding(.vertical, 6) }
+                if showsSearch { closeSearch() } else { showsSearch = true }
+            } label: {
+                Image(systemName: "magnifyingglass").padding(.vertical, 6)
+            }
             .help("Search").accessibilityLabel("Search").accessibilityIdentifier("revealSearch")
             .keyboardShortcut("f", modifiers: .command)
             ForEach(LibrarySection.allCases) { section in
@@ -269,7 +300,7 @@ struct MovieLibraryView: View {
         }
         .font(.system(size: 14))
         .padding(.horizontal, 14).padding(.vertical, 6).frame(width: 320, height: 32)
-        .modifier(SearchFieldGlass())
+        .glassSurface(in: Capsule(), interactive: true)
         .background {
             GeometryReader { geometry in
                 SearchOutsideClick { closeSearch() }
@@ -289,8 +320,9 @@ struct MovieLibraryView: View {
     private func chooseFeature() {
         guard showsFeature, !model.isLoading else { return }
         var random = SystemRandomNumberGenerator()
-        featuredVideos = FeaturedRecommendations.choose(recent: model.recentlyAddedVideos,
-                                                        continuing: model.recentContinueMovies, using: &random)
+        featuredVideos = FeaturedRecommendations.choose(
+            recent: model.recentlyAddedVideos,
+            continuing: model.recentContinueMovies, using: &random)
         if featuredVideos.isEmpty { featuredColor = Color(nsColor: ArtworkColor.pageBackground) }
     }
 }
@@ -319,21 +351,10 @@ private struct LibraryTabButton: View {
     }
 }
 
-private extension ToolbarContent {
+extension ToolbarContent {
     @ToolbarContentBuilder
-    func withoutSharedBackground() -> some ToolbarContent {
-        if #available(macOS 26.0, *) { self.sharedBackgroundVisibility(.hidden) }
-        else { self }
-    }
-}
-
-private struct SearchFieldGlass: ViewModifier {
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.interactive(), in: .capsule)
-        } else {
-            content.background(.ultraThinMaterial, in: Capsule())
-        }
+    fileprivate func withoutSharedBackground() -> some ToolbarContent {
+        if #available(macOS 26.0, *) { self.sharedBackgroundVisibility(.hidden) } else { self }
     }
 }
 

@@ -26,10 +26,12 @@ struct FeaturedRecommendationCarousel: View {
         ZStack {
             if let video = current {
                 NavigationLink(value: video) {
-                    FeaturedMediaView(video: details[video.id] ?? video, client: client, onColor: { color in
-                        colors[video.id] = color
-                        if currentID == video.id { onColor(color) }
-                    })
+                    FeaturedMediaView(
+                        video: details[video.id] ?? video, client: client,
+                        onColor: { color in
+                            colors[video.id] = color
+                            if currentID == video.id { onColor(color) }
+                        })
                 }
                 .buttonStyle(.plain).accessibilityIdentifier("featuredMedia")
                 .id(video.id)
@@ -38,10 +40,14 @@ struct FeaturedRecommendationCarousel: View {
                     Spacer()
                     HStack {
                         Spacer()
-                        GlassPlayButton(resume: video.isInProgress, disabled: isPreparing,
-                                        title: video.type == "Series" ? "View Show" : nil) { onPlay(video) }
-                            .accessibilityIdentifier("featuredPlay")
-                            .accessibilityLabel((video.type == "Series" ? "View show " : (video.isInProgress ? "Resume " : "Play ")) + video.title)
+                        GlassPlayButton(
+                            resume: video.isInProgress, disabled: isPreparing,
+                            title: video.type == "Series" ? "View Show" : nil
+                        ) { onPlay(video) }
+                        .accessibilityIdentifier("featuredPlay")
+                        .accessibilityLabel(
+                            (video.type == "Series" ? "View show " : (video.isInProgress ? "Resume " : "Play "))
+                                + video.title)
                     }
                     .padding(.horizontal, 30).padding(.bottom, 50)
                 }
@@ -60,7 +66,9 @@ struct FeaturedRecommendationCarousel: View {
                     Spacer()
                     HStack(spacing: 0) {
                         ForEach(Array(videos.enumerated()), id: \.element.id) { position, video in
-                            Button { select(position) } label: {
+                            Button {
+                                select(position)
+                            } label: {
                                 Capsule().fill(.white.opacity(index == position ? 1 : 0.4))
                                     .frame(width: index == position ? 12 : 6, height: 6)
                                     .frame(width: 16, height: 24)
@@ -79,10 +87,12 @@ struct FeaturedRecommendationCarousel: View {
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.65), value: currentID)
         .onHover { hovered = $0 }
-        .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { gesture in
-            guard abs(gesture.translation.width) > max(50, abs(gesture.translation.height)) else { return }
-            move(by: gesture.translation.width < 0 ? 1 : -1)
-        })
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 30).onEnded { gesture in
+                guard abs(gesture.translation.width) > max(50, abs(gesture.translation.height)) else { return }
+                move(by: gesture.translation.width < 0 ? 1 : -1)
+            }
+        )
         .background {
             GeometryReader { geometry in
                 FeaturedPointerRegion(onHover: { hovered = $0 }, onSwipe: { move(by: $0) })
@@ -99,8 +109,7 @@ struct FeaturedRecommendationCarousel: View {
         .task(id: rotationKey) {
             guard rotating else { return }
             while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: 8_000_000_000) }
-                catch { return }
+                do { try await Task.sleep(nanoseconds: 8_000_000_000) } catch { return }
                 guard !Task.isCancelled, rotating else { return }
                 move(by: 1, resetTimer: false)
             }
@@ -112,7 +121,8 @@ struct FeaturedRecommendationCarousel: View {
             details = [:]
             for video in videos {
                 guard !Task.isCancelled else { return }
-                let request = (try? client.imageRequest(for: video, type: .backdrop, maxWidth: 2560))
+                let request =
+                    (try? client.imageRequest(for: video, type: .backdrop, maxWidth: 2560))
                     ?? (try? client.imageRequest(for: video, type: .primary, maxWidth: 1600))
                 if let request, let image = try? await ArtworkCache.shared.image(for: request) {
                     guard !Task.isCancelled else { return }
@@ -132,7 +142,9 @@ struct FeaturedRecommendationCarousel: View {
     }
 
     private func arrow(_ symbol: String, label: String, offset: Int) -> some View {
-        Button { move(by: offset) } label: {
+        Button {
+            move(by: offset)
+        } label: {
             Image(systemName: symbol).font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
                 .shadow(color: .black.opacity(0.7), radius: 3, y: 1)
@@ -160,7 +172,8 @@ private struct FeaturedPointerRegion: NSViewRepresentable {
     let onSwipe: (Int) -> Void
     func makeNSView(context: Context) -> PointerView { PointerView() }
     func updateNSView(_ view: PointerView, context: Context) {
-        view.onHover = onHover; view.onSwipe = onSwipe
+        view.onHover = onHover
+        view.onSwipe = onSwipe
     }
     static func dismantleNSView(_ view: PointerView, coordinator: ()) { view.removeMonitor() }
 
@@ -180,19 +193,22 @@ private struct FeaturedPointerRegion: NSViewRepresentable {
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .swipe]) { [weak self] event in
                 guard let self, let window = self.window, event.window === window, window.isKeyWindow,
-                      NSApp.isActive, self.visibleRect.contains(self.convert(event.locationInWindow, from: nil)),
-                      window.contentLayoutRect.contains(event.locationInWindow) else { return event }
+                    NSApp.isActive, self.visibleRect.contains(self.convert(event.locationInWindow, from: nil)),
+                    window.contentLayoutRect.contains(event.locationInWindow)
+                else { return event }
                 if event.type == .swipe {
                     guard event.deltaX != 0 else { return event }
                     self.onSwipe?(event.deltaX < 0 ? 1 : -1)
                     return nil
                 }
                 if event.phase.contains(.began) || event.timestamp - self.lastEventTime > 0.25 {
-                    self.horizontalDistance = 0; self.swipeIssued = false
+                    self.horizontalDistance = 0
+                    self.swipeIssued = false
                 }
                 self.lastEventTime = event.timestamp
                 guard event.momentumPhase.isEmpty else { return event }
-                let horizontal = event.scrollingDeltaX, vertical = event.scrollingDeltaY
+                let horizontal = event.scrollingDeltaX
+                let vertical = event.scrollingDeltaY
                 guard abs(horizontal) > abs(vertical), horizontal != 0 else { return event }
                 self.horizontalDistance += horizontal
                 if abs(self.horizontalDistance) >= 50, !self.swipeIssued {
@@ -205,9 +221,12 @@ private struct FeaturedPointerRegion: NSViewRepresentable {
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
             if let region { removeTrackingArea(region) }
-            let tracking = NSTrackingArea(rect: .zero,
-                options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect, .enabledDuringMouseDrag], owner: self)
-            addTrackingArea(tracking); region = tracking
+            let tracking = NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect, .enabledDuringMouseDrag],
+                owner: self)
+            addTrackingArea(tracking)
+            region = tracking
         }
         override func mouseEntered(with event: NSEvent) { onHover?(true) }
         override func mouseMoved(with event: NSEvent) { onHover?(true) }

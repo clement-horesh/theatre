@@ -75,6 +75,7 @@ struct NativePlayerMenu: NSViewRepresentable {
             popup.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY + 6), in: button)
             // Also runs for dismissal without a selection.
             finishTracking()
+            selectionAction = nil
         }
 
         @objc func selectChoice(_ item: NSMenuItem) { selectionAction?(item.tag) }

@@ -19,17 +19,15 @@ enum FeaturedRecommendations {
             .filter { seen.insert($0.id).inserted }
     }
 
-    static func choose<R: RandomNumberGenerator>(recent: [VideoItem], continuing: [VideoItem],
-                                                using random: inout R) -> [VideoItem] {
+    static func choose<R: RandomNumberGenerator>(
+        recent: [VideoItem], continuing: [VideoItem],
+        using random: inout R
+    ) -> [VideoItem] {
         let pool = candidates(recent: recent, continuing: continuing)
         let unseen = pool.filter { $0.isUnwatched && !$0.isInProgress }.shuffled(using: &random)
         let others = pool.filter { !($0.isUnwatched && !$0.isInProgress) }.shuffled(using: &random)
-        var seen = Set<String>()
-        let distinct = (unseen + others).filter { video in
-            let titleID = video.type == "Episode" ? (video.seriesID ?? video.id) : video.id
-            return seen.insert(titleID).inserted
-        }
-        return Array(distinct.prefix(5)).shuffled(using: &random)
+        // candidates already excludes episodes and removes duplicate title IDs.
+        return Array((unseen + others).prefix(5)).shuffled(using: &random)
     }
 
     static func nextIndex(from index: Int, by offset: Int, count: Int) -> Int {

@@ -24,8 +24,11 @@ struct PlayerPane: View {
                 .accessibilityHidden(!chrome.isVisible)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: chrome.isVisible)
             if model.isStartingPlayback || playback.isPreparing {
-                VStack(spacing: 10) { ProgressView(); Text("Preparing video…").font(.callout) }
-                    .padding(20).modifier(PlayerGlass(shape: .rounded(20)))
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("Preparing video…").font(.callout)
+                }
+                .padding(20).modifier(PlayerGlass(shape: .rounded(20)))
             }
             if let error = model.playbackError ?? playback.errorMessage {
                 VStack(spacing: 12) {
@@ -42,9 +45,14 @@ struct PlayerPane: View {
         .clipped()
         .background {
             GeometryReader { geometry in
-                PlayerCursorVisibility(controlsHidden: !chrome.isVisible && isActivelyPlaying,
-                                       onActivity: showControls)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                PlayerCursorVisibility(
+                    controlsHidden: !chrome.isVisible, hidesCursor: isActivelyPlaying,
+                    onActivity: { chrome.pointerEnteredWindow(isPlaying: isActivelyPlaying) },
+                    onWindowExit: {
+                        if !model.isVideoFullscreen { chrome.pointerExitedWindow() }
+                    }
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
         .onAppear { showControls() }
@@ -57,9 +65,21 @@ struct PlayerPane: View {
     }
 
     private var playerControls: some View {
+        Group {
+            if #available(macOS 26.0, *) {
+                GlassEffectContainer(spacing: 16) { playerControlsContent }
+            } else {
+                playerControlsContent
+            }
+        }
+    }
+
+    private var playerControlsContent: some View {
         ZStack {
-            LinearGradient(colors: [.black.opacity(0.25), .clear, .clear, .black.opacity(0.45)],
-                           startPoint: .top, endPoint: .bottom).allowsHitTesting(false)
+            LinearGradient(
+                colors: [.black.opacity(0.25), .clear, .clear, .black.opacity(0.45)],
+                startPoint: .top, endPoint: .bottom
+            ).allowsHitTesting(false)
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
                     Spacer()
@@ -75,6 +95,7 @@ struct PlayerPane: View {
                         } else {
                             Text(model.currentVideo?.name ?? "").font(.title3.weight(.semibold)).lineLimit(2)
                         }
+
                     }
                     .shadow(color: .black.opacity(0.6), radius: 4, y: 1)
                     Spacer(minLength: 8)
@@ -85,14 +106,20 @@ struct PlayerPane: View {
             }
             .padding(model.isVideoFullscreen ? 14 : 12)
             HStack(spacing: 32) {
-                transportButton("Back 10 seconds", symbol: "gobackward.10", diameter: 48, symbolSize: 22,
-                                disabled: !playback.canSeek) { playback.seek(by: -10) }
-                transportButton(playback.isPlaying ? "Pause" : (playback.hasEnded ? "Replay" : "Play"),
-                                symbol: playback.isPlaying ? "pause.fill" : "play.fill", diameter: 72, symbolSize: 30,
-                                disabled: model.isStartingPlayback || playback.isPreparing) { model.togglePlayback() }
-                    .accessibilityIdentifier("playPause")
-                transportButton("Forward 10 seconds", symbol: "goforward.10", diameter: 48, symbolSize: 22,
-                                disabled: !playback.canSeek) { playback.seek(by: 10) }
+                transportButton(
+                    "Back 10 seconds", symbol: "gobackward.10", diameter: 48, symbolSize: 22,
+                    disabled: !playback.canSeek
+                ) { playback.seek(by: -10) }
+                transportButton(
+                    playback.isPlaying ? "Pause" : (playback.hasEnded ? "Replay" : "Play"),
+                    symbol: playback.isPlaying ? "pause.fill" : "play.fill", diameter: 72, symbolSize: 30,
+                    disabled: model.isStartingPlayback || playback.isPreparing
+                ) { model.togglePlayback() }
+                .accessibilityIdentifier("playPause")
+                transportButton(
+                    "Forward 10 seconds", symbol: "goforward.10", diameter: 48, symbolSize: 22,
+                    disabled: !playback.canSeek
+                ) { playback.seek(by: 10) }
             }
             .onHover { chrome.setInteraction(.transport, active: $0, isPlaying: playback.isPlaying) }
         }
@@ -100,8 +127,15 @@ struct PlayerPane: View {
 
     private var volumeControl: some View {
         HStack(spacing: 8) {
-            Slider(value: Binding(get: { playback.volume }, set: { playback.setVolume($0); showControls() }), in: 0...100)
-                .frame(width: 92).controlSize(.small).accessibilityLabel("Volume")
+            Slider(
+                value: Binding(
+                    get: { playback.volume },
+                    set: {
+                        playback.setVolume($0)
+                        showControls()
+                    }), in: 0...100
+            )
+            .frame(width: 92).controlSize(.small).accessibilityLabel("Volume")
             Image(systemName: playback.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 .font(.system(size: 16)).frame(width: 22)
         }
@@ -112,35 +146,49 @@ struct PlayerPane: View {
 
     private var trackControls: some View {
         HStack(spacing: 3) {
-            NativePlayerMenu(symbol: "captions.bubble", title: "Subtitles", identifier: "subtitleMenu",
-                             choices: subtitleChoices, selection: Int(playback.selectedSubtitle),
-                             onSelect: { playback.selectSubtitle(Int32($0)) }, onTrackingChange: menuTracking)
-            NativePlayerMenu(symbol: "waveform", title: "Audio", identifier: "audioMenu",
-                             choices: playback.audioTracks.filter { $0.id >= 0 }.map { .init(id: Int($0.id), title: $0.name) },
-                             selection: Int(playback.selectedAudio), onSelect: { playback.selectAudio(Int32($0)) },
-                             onTrackingChange: menuTracking)
-            NativePlayerMenu(symbol: "speedometer", title: "Playback speed", identifier: "speedMenu",
-                             choices: [50, 75, 100, 125, 150, 200].map { .init(id: $0, title: $0 == 100 ? "Normal" : String(format: "%g×", Double($0) / 100)) },
-                             selection: Int((playback.rate * 100).rounded()),
-                             onSelect: { playback.setRate(Double($0) / 100) }, onTrackingChange: menuTracking)
+            NativePlayerMenu(
+                symbol: "captions.bubble", title: "Subtitles", identifier: "subtitleMenu",
+                choices: subtitleChoices, selection: Int(playback.selectedSubtitle),
+                onSelect: { playback.selectSubtitle(Int32($0)) }, onTrackingChange: menuTracking)
+            NativePlayerMenu(
+                symbol: "waveform", title: "Audio", identifier: "audioMenu",
+                choices: playback.audioTracks.filter { $0.id >= 0 }.map { .init(id: Int($0.id), title: $0.name) },
+                selection: Int(playback.selectedAudio), onSelect: { playback.selectAudio(Int32($0)) },
+                onTrackingChange: menuTracking)
+            NativePlayerMenu(
+                symbol: "speedometer", title: "Playback speed", identifier: "speedMenu",
+                choices: [50, 75, 100, 125, 150, 200].map {
+                    .init(id: $0, title: $0 == 100 ? "Normal" : String(format: "%g×", Double($0) / 100))
+                },
+                selection: Int((playback.rate * 100).rounded()),
+                onSelect: { playback.setRate(Double($0) / 100) }, onTrackingChange: menuTracking)
         }
         .padding(4).modifier(PlayerGlass(shape: .capsule))
         .onHover { chrome.setInteraction(.tracks, active: $0, isPlaying: playback.isPlaying) }
     }
 
     private var subtitleChoices: [PlayerMenuChoice] {
-        [.init(id: -1, title: "Off")] + playback.subtitleTracks.filter { $0.id >= 0 }.map { .init(id: Int($0.id), title: $0.name) }
+        [.init(id: -1, title: "Off")]
+            + playback.subtitleTracks.filter { $0.id >= 0 }.map { .init(id: Int($0.id), title: $0.name) }
     }
 
     private var timeline: some View {
         HStack(spacing: 9) {
             Text(clock(isScrubbing ? scrubSeconds : playback.seconds)).frame(minWidth: 32, alignment: .trailing)
-            Slider(value: Binding(get: { isScrubbing ? scrubSeconds : playback.seconds }, set: { scrubSeconds = $0 }),
-                   in: 0...max(1, playback.duration), onEditingChanged: { editing in
-                if editing { scrubSeconds = playback.seconds; isScrubbing = true }
-                else { playback.seek(to: scrubSeconds); isScrubbing = false }
-                chrome.setInteraction(.scrubbing, active: editing, isPlaying: playback.isPlaying)
-            })
+            Slider(
+                value: Binding(get: { isScrubbing ? scrubSeconds : playback.seconds }, set: { scrubSeconds = $0 }),
+                in: 0...max(1, playback.duration),
+                onEditingChanged: { editing in
+                    if editing {
+                        scrubSeconds = playback.seconds
+                        isScrubbing = true
+                    } else {
+                        playback.seek(to: scrubSeconds)
+                        isScrubbing = false
+                    }
+                    chrome.setInteraction(.scrubbing, active: editing, isPlaying: playback.isPlaying)
+                }
+            )
             .controlSize(.small).tint(.white).disabled(!playback.canSeek).accessibilityLabel("Playback position")
             Text("−" + clock(max(0, playback.duration - (isScrubbing ? scrubSeconds : playback.seconds))))
                 .frame(minWidth: 38, alignment: .leading)
@@ -150,9 +198,14 @@ struct PlayerPane: View {
         .onHover { chrome.setInteraction(.timeline, active: $0, isPlaying: playback.isPlaying) }
     }
 
-    private func transportButton(_ title: String, symbol: String, diameter: CGFloat, symbolSize: CGFloat,
-                                 disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button { action(); showControls() } label: {
+    private func transportButton(
+        _ title: String, symbol: String, diameter: CGFloat, symbolSize: CGFloat,
+        disabled: Bool = false, action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            action()
+            showControls()
+        } label: {
             Image(systemName: symbol).font(.system(size: symbolSize, weight: .medium))
                 .frame(width: diameter, height: diameter).contentShape(Circle())
         }
@@ -172,42 +225,64 @@ struct PlayerPane: View {
 }
 
 private struct PlayerGlass: ViewModifier {
-    enum Shape { case capsule, circle, rounded(CGFloat) }
+    enum Shape {
+        case capsule, circle
+        case rounded(CGFloat)
+    }
     let shape: Shape
     func body(content: Content) -> some View {
         switch shape {
-        case .circle: glass(content, in: Circle())
-        case .capsule: glass(content, in: Capsule())
-        case .rounded(let radius): glass(content, in: RoundedRectangle(cornerRadius: radius))
+        case .circle: content.glassSurface(in: Circle())
+        case .capsule: content.glassSurface(in: Capsule())
+        case .rounded(let radius): content.glassSurface(in: RoundedRectangle(cornerRadius: radius))
         }
-    }
-    @ViewBuilder private func glass<S: SwiftUI.Shape>(_ content: Content, in shape: S) -> some View {
-        if #available(macOS 26.0, *) { content.glassEffect(.regular, in: shape) }
-        else { content.background(.ultraThinMaterial, in: shape) }
     }
 }
 
 @MainActor
 final class PlayerChromeState: ObservableObject {
-    enum Interaction: Hashable { case hover, transport, volume, tracks, timeline, scrubbing, menu }
+    enum Interaction: Hashable { case transport, volume, tracks, timeline, scrubbing, menu }
     @Published private(set) var isVisible = true
     private var hideTask: Task<Void, Never>?
     private var interactions: Set<Interaction> = []
+    private var pointerInWindow = true
 
     func activity(isPlaying: Bool, delay: Double = 3) {
         hideTask?.cancel()
+        guard pointerInWindow || !interactions.isEmpty else {
+            isVisible = false
+            return
+        }
         isVisible = true
         guard isPlaying, interactions.isEmpty else { return }
         hideTask = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
-            catch { return }
+            do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
             guard !Task.isCancelled else { return }
             self?.isVisible = false
         }
     }
+
+    func pointerEnteredWindow(isPlaying: Bool) {
+        pointerInWindow = true
+        activity(isPlaying: isPlaying)
+    }
+
+    func pointerExitedWindow() {
+        pointerInWindow = false
+        hideTask?.cancel()
+        hideTask = nil
+        // Finish an open menu or an active scrub without interrupting its control.
+        interactions.formIntersection([.menu, .scrubbing])
+        isVisible = !interactions.isEmpty
+    }
+
     func setInteraction(_ interaction: Interaction, active: Bool, isPlaying: Bool) {
         if active { interactions.insert(interaction) } else { interactions.remove(interaction) }
         activity(isPlaying: isPlaying)
     }
-    func cancel() { hideTask?.cancel(); hideTask = nil; interactions.removeAll() }
+    func cancel() {
+        hideTask?.cancel()
+        hideTask = nil
+        interactions.removeAll()
+    }
 }

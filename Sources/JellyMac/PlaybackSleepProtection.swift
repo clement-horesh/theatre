@@ -10,12 +10,17 @@ final class PlaybackSleepProtection {
     private let reason = "Theatre video playback" as CFString
 
     func update(isPlaying: Bool, watchingInForeground: Bool) {
-        guard isPlaying else { release(); return }
+        guard isPlaying else {
+            release()
+            return
+        }
         if assertionID == kIOPMNullAssertionID {
             var identifier = IOPMAssertionID(kIOPMNullAssertionID)
-            if IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
-                                         IOPMAssertionLevel(kIOPMAssertionLevelOn), reason,
-                                         &identifier) == kIOReturnSuccess {
+            if IOPMAssertionCreateWithName(
+                kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn), reason,
+                &identifier) == kIOReturnSuccess
+            {
                 assertionID = identifier
             }
         }
@@ -26,7 +31,7 @@ final class PlaybackSleepProtection {
             return
         }
         let now = ProcessInfo.processInfo.systemUptime
-        if lastUserActivity == nil || now - lastUserActivity! >= 15 {
+        if lastUserActivity.map({ now - $0 >= 15 }) ?? true {
             if IOPMAssertionDeclareUserActivity(reason, kIOPMUserActiveLocal, &userActivityID) == kIOReturnSuccess {
                 lastUserActivity = now
             }

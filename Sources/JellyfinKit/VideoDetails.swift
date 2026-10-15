@@ -9,7 +9,11 @@ public struct VideoPerson: Decodable, Identifiable, Sendable, Equatable {
     public var id: String { "\(itemID ?? name):\(type ?? ""):\(role ?? "")" }
     public var credit: String { (role?.isEmpty == false ? role : type) ?? "" }
     enum CodingKeys: String, CodingKey {
-        case itemID = "Id", name = "Name", role = "Role", type = "Type", primaryImageTag = "PrimaryImageTag"
+        case itemID = "Id"
+        case name = "Name"
+        case role = "Role"
+        case type = "Type"
+        case primaryImageTag = "PrimaryImageTag"
     }
 }
 
@@ -41,11 +45,22 @@ public struct VideoDetailStream: Decodable, Sendable, Equatable {
     public let isHearingImpaired: Bool?
     public let isAttachedPic: Bool?
     enum CodingKeys: String, CodingKey {
-        case type = "Type", language = "Language", displayTitle = "DisplayTitle", title = "Title"
-        case codec = "Codec", profile = "Profile", channelLayout = "ChannelLayout", channels = "Channels"
-        case width = "Width", height = "Height", videoRange = "VideoRange", videoRangeType = "VideoRangeType"
-        case audioSpatialFormat = "AudioSpatialFormat", isOriginal = "IsOriginal"
-        case isHearingImpaired = "IsHearingImpaired", isAttachedPic = "IsAttachedPic"
+        case type = "Type"
+        case language = "Language"
+        case displayTitle = "DisplayTitle"
+        case title = "Title"
+        case codec = "Codec"
+        case profile = "Profile"
+        case channelLayout = "ChannelLayout"
+        case channels = "Channels"
+        case width = "Width"
+        case height = "Height"
+        case videoRange = "VideoRange"
+        case videoRangeType = "VideoRangeType"
+        case audioSpatialFormat = "AudioSpatialFormat"
+        case isOriginal = "IsOriginal"
+        case isHearingImpaired = "IsHearingImpaired"
+        case isAttachedPic = "IsAttachedPic"
     }
     public var languageName: String? {
         guard let language, !language.isEmpty, language != "und" else { return nil }
@@ -68,29 +83,40 @@ public struct VideoDetailStream: Decodable, Sendable, Equatable {
     }
 }
 
-public extension VideoItem {
-    var detailStreams: [VideoDetailStream] {
+extension VideoItem {
+    public var detailStreams: [VideoDetailStream] {
         if let mediaStreams, !mediaStreams.isEmpty { return mediaStreams }
         return mediaSources?.first?.mediaStreams ?? []
     }
-    var actors: [VideoPerson] { (people ?? []).filter { $0.type == "Actor" } }
-    var directors: [VideoPerson] { (people ?? []).filter { $0.type == "Director" } }
-    var runtimeLabel: String? {
+    public var actors: [VideoPerson] { (people ?? []).filter { $0.type == "Actor" } }
+    public var directors: [VideoPerson] { (people ?? []).filter { $0.type == "Director" } }
+    public var runtimeLabel: String? {
         guard let runTimeTicks, runTimeTicks > 0 else { return nil }
         let minutes = max(1, runTimeTicks / 600_000_000)
-        return minutes < 60 ? "\(minutes)m" : (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(minutes % 60)m")
+        return minutes < 60
+            ? "\(minutes)m" : (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(minutes % 60)m")
     }
-    var mediaBadges: [String] {
+    public var mediaBadges: [String] {
         let streams = detailStreams
         var badges: [String] = []
         if let picture = streams.first(where: { $0.type == "Video" && $0.isAttachedPic != true }) {
-            if (picture.width ?? 0) >= 3840 || (picture.height ?? 0) >= 2160 { badges.append("4K") }
-            else if (picture.width ?? 0) >= 1280 || (picture.height ?? 0) >= 720 { badges.append("HD") }
+            if (picture.width ?? 0) >= 3840 || (picture.height ?? 0) >= 2160 {
+                badges.append("4K")
+            } else if (picture.width ?? 0) >= 1280 || (picture.height ?? 0) >= 720 {
+                badges.append("HD")
+            }
             let range = picture.videoRangeType ?? ""
-            if range.hasPrefix("DOVI"), !range.contains("Invalid") { badges.append("Dolby Vision") }
-            else if picture.videoRange == "HDR" || ["HDR10", "HDR10Plus", "HLG"].contains(range) { badges.append("HDR") }
+            if range.hasPrefix("DOVI"), !range.contains("Invalid") {
+                badges.append("Dolby Vision")
+            } else if picture.videoRange == "HDR" || ["HDR10", "HDR10Plus", "HLG"].contains(range) {
+                badges.append("HDR")
+            }
         }
-        if streams.contains(where: { $0.type == "Audio" && ($0.audioSpatialFormat == "DolbyAtmos" || $0.profile?.localizedCaseInsensitiveContains("Dolby Atmos") == true) }) {
+        if streams.contains(where: {
+            $0.type == "Audio"
+                && ($0.audioSpatialFormat == "DolbyAtmos"
+                    || $0.profile?.localizedCaseInsensitiveContains("Dolby Atmos") == true)
+        }) {
             badges.append("Dolby Atmos")
         }
         if streams.contains(where: \.hasCC) { badges.append("CC") }

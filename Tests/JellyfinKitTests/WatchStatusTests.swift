@@ -1,14 +1,20 @@
 import Foundation
 import XCTest
+
 @testable import JellyfinKit
 
 final class WatchStatusTests: XCTestCase {
-    private func item(type: String = "Movie", duration: Int64? = 72_000_000_000,
-                      userData: [String: Any]? = nil, episode: Bool = false) throws -> VideoItem {
+    private func item(
+        type: String = "Movie", duration: Int64? = 72_000_000_000,
+        userData: [String: Any]? = nil, episode: Bool = false
+    ) throws -> VideoItem {
         var data: [String: Any] = ["Id": "video", "Name": "Title", "Type": type]
         data["RunTimeTicks"] = duration
         data["UserData"] = userData
-        if episode { data["ParentIndexNumber"] = 1; data["IndexNumber"] = 1 }
+        if episode {
+            data["ParentIndexNumber"] = 1
+            data["IndexNumber"] = 1
+        }
         return try JSONDecoder().decode(VideoItem.self, from: JSONSerialization.data(withJSONObject: data))
     }
 
@@ -36,10 +42,12 @@ final class WatchStatusTests: XCTestCase {
     }
 
     func testEpisodeRemainingLabelAndSeriesAggregate() throws {
-        let episode = try item(type: "Episode", duration: 12_000_000_000,
-                               userData: ["Played": false, "PlaybackPositionTicks": 4_800_000_000], episode: true)
+        let episode = try item(
+            type: "Episode", duration: 12_000_000_000,
+            userData: ["Played": false, "PlaybackPositionTicks": 4_800_000_000], episode: true)
         XCTAssertEqual(episode.progressLabel, "S1, E1 · 12m")
-        let series = try item(type: "Series", userData: ["Played": false, "UnplayedItemCount": 3, "PlaybackPositionTicks": 10])
+        let series = try item(
+            type: "Series", userData: ["Played": false, "UnplayedItemCount": 3, "PlaybackPositionTicks": 10])
         XCTAssertTrue(series.isUnwatched)
         XCTAssertFalse(series.isInProgress)
     }
@@ -51,7 +59,8 @@ final class WatchStatusTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(movie.progressFraction, 0)
             XCTAssertLessThanOrEqual(movie.progressFraction, 1)
         }
-        let unknown = try item(duration: nil, userData: ["Played": false, "PlaybackPositionTicks": 60_000_000, "PlayedPercentage": 50])
+        let unknown = try item(
+            duration: nil, userData: ["Played": false, "PlaybackPositionTicks": 60_000_000, "PlayedPercentage": 50])
         XCTAssertTrue(unknown.isInProgress)
         XCTAssertEqual(unknown.remainingTimeLabel, "Continue")
         XCTAssertEqual(unknown.progressFraction, 0.5)

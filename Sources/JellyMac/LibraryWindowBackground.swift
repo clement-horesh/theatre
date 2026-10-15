@@ -15,7 +15,10 @@ struct LibraryWindowBackground: NSViewRepresentable {
     let onPhase: (LibraryWindowPhase) -> Void
     func makeNSView(context: Context) -> TintView { TintView() }
     func updateNSView(_ view: TintView, context: Context) {
-        view.color = color; view.animateColor = animateColor; view.onPhase = onPhase; view.apply()
+        view.color = color
+        view.animateColor = animateColor
+        view.onPhase = onPhase
+        view.apply()
     }
 
     final class TintView: NSView {
@@ -33,22 +36,28 @@ struct LibraryWindowBackground: NSViewRepresentable {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
             transitionPhase = nil
-            colorTimer?.invalidate(); colorTimer = nil; targetColor = nil
+            colorTimer?.invalidate()
+            colorTimer = nil
+            targetColor = nil
             guard let window else { return }
-            for name in [NSWindow.willEnterFullScreenNotification,
-                         NSWindow.willExitFullScreenNotification,
-                         NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
-                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated {
-                        guard let self else { return }
-                        switch name {
-                        case NSWindow.willEnterFullScreenNotification: self.transitionPhase = .enteringFullscreen
-                        case NSWindow.willExitFullScreenNotification: self.transitionPhase = .exitingFullscreen
-                        default: self.transitionPhase = nil
+            for name in [
+                NSWindow.willEnterFullScreenNotification,
+                NSWindow.willExitFullScreenNotification,
+                NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification,
+            ] {
+                observers.append(
+                    NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) {
+                        [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self else { return }
+                            switch name {
+                            case NSWindow.willEnterFullScreenNotification: self.transitionPhase = .enteringFullscreen
+                            case NSWindow.willExitFullScreenNotification: self.transitionPhase = .exitingFullscreen
+                            default: self.transitionPhase = nil
+                            }
+                            self.apply(deferStateChanges: false)
                         }
-                        self.apply(deferStateChanges: false)
-                    }
-                })
+                    })
             }
             apply()
         }
@@ -81,16 +90,21 @@ struct LibraryWindowBackground: NSViewRepresentable {
             guard targetColor != color else { return }
             let wasConfigured = targetColor != nil
             targetColor = color
-            colorTimer?.invalidate(); colorTimer = nil
+            colorTimer?.invalidate()
+            colorTimer = nil
             guard animateColor, wasConfigured, window.backgroundColor != color else {
                 window.backgroundColor = color
                 return
             }
-            let start = window.backgroundColor ?? ArtworkColor.pageBackground, end = color
+            let start = window.backgroundColor ?? ArtworkColor.pageBackground
+            let end = color
             let startedAt = ProcessInfo.processInfo.systemUptime
             let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak window] timer in
                 MainActor.assumeIsolated {
-                    guard let window else { timer.invalidate(); return }
+                    guard let window else {
+                        timer.invalidate()
+                        return
+                    }
                     let fraction = min(1, (ProcessInfo.processInfo.systemUptime - startedAt) / 0.65)
                     let eased = fraction * fraction * (3 - 2 * fraction)
                     window.backgroundColor = start.blended(withFraction: eased, of: end) ?? end
@@ -110,7 +124,6 @@ struct LibraryWindowBackground: NSViewRepresentable {
 
 struct PageFullscreenNavigation: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 15.0, *) { content.windowToolbarFullScreenVisibility(.onHover) }
-        else { content }
+        if #available(macOS 15.0, *) { content.windowToolbarFullScreenVisibility(.onHover) } else { content }
     }
 }

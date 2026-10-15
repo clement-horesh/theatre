@@ -35,17 +35,32 @@ public struct VideoItem: Decodable, Identifiable, Sendable, Hashable {
     public let userData: VideoUserData?
 
     enum CodingKeys: String, CodingKey {
-        case id = "Id", name = "Name", type = "Type", seriesName = "SeriesName"
-        case seriesID = "SeriesId", userData = "UserData"
-        case indexNumber = "IndexNumber", parentIndexNumber = "ParentIndexNumber"
+        case id = "Id"
+        case name = "Name"
+        case type = "Type"
+        case seriesName = "SeriesName"
+        case seriesID = "SeriesId"
+        case userData = "UserData"
+        case indexNumber = "IndexNumber"
+        case parentIndexNumber = "ParentIndexNumber"
         case childCount = "ChildCount"
-        case productionYear = "ProductionYear", runTimeTicks = "RunTimeTicks"
-        case overview = "Overview", officialRating = "OfficialRating", genres = "Genres"
-        case people = "People", productionLocations = "ProductionLocations", premiereDate = "PremiereDate"
-        case studios = "Studios", mediaStreams = "MediaStreams", mediaSources = "MediaSources"
-        case imageTags = "ImageTags", backdropImageTags = "BackdropImageTags"
-        case parentBackdropItemID = "ParentBackdropItemId", parentBackdropImageTags = "ParentBackdropImageTags"
-        case parentLogoItemID = "ParentLogoItemId", parentLogoImageTag = "ParentLogoImageTag"
+        case productionYear = "ProductionYear"
+        case runTimeTicks = "RunTimeTicks"
+        case overview = "Overview"
+        case officialRating = "OfficialRating"
+        case genres = "Genres"
+        case people = "People"
+        case productionLocations = "ProductionLocations"
+        case premiereDate = "PremiereDate"
+        case studios = "Studios"
+        case mediaStreams = "MediaStreams"
+        case mediaSources = "MediaSources"
+        case imageTags = "ImageTags"
+        case backdropImageTags = "BackdropImageTags"
+        case parentBackdropItemID = "ParentBackdropItemId"
+        case parentBackdropImageTags = "ParentBackdropImageTags"
+        case parentLogoItemID = "ParentLogoItemId"
+        case parentLogoImageTag = "ParentLogoImageTag"
     }
 
     // Synthesized equality compares the whole snapshot, so SwiftUI refreshes
@@ -59,18 +74,14 @@ public struct VideoItem: Decodable, Identifiable, Sendable, Hashable {
         return "\(seriesName) · \(episode.isEmpty ? name : "\(episode) — \(name)")"
     }
 
-    public var detail: String {
-        [type, productionYear.map(String.init), runTimeTicks.map { "\(max(1, $0 / 600_000_000)) min" }]
-            .compactMap { $0 }.joined(separator: " · ")
-    }
-
     public var isUnwatched: Bool {
         userData?.played == false || (userData?.unplayedItemCount ?? 0) > 0
     }
 
     public var isInProgress: Bool {
         guard type != "Series", let position = userData?.playbackPositionTicks,
-              position > 0 else { return false }
+            position > 0
+        else { return false }
         if let duration = runTimeTicks, duration > 0 { return position < duration }
         return true
     }
@@ -92,7 +103,8 @@ public struct VideoItem: Decodable, Identifiable, Sendable, Hashable {
         let position = max(0, userData?.playbackPositionTicks ?? 0)
         let minutes = Int(ceil(Double(max(0, duration - position)) / 600_000_000))
         if minutes < 60 { return "\(max(1, minutes))m" }
-        let hours = minutes / 60, remainder = minutes % 60
+        let hours = minutes / 60
+        let remainder = minutes % 60
         return remainder == 0 ? "\(hours)h" : "\(hours)h \(remainder)m"
     }
 
@@ -111,20 +123,27 @@ public struct VideoUserData: Decodable, Sendable, Equatable {
     public let playedPercentage: Double?
     public let unplayedItemCount: Int?
     enum CodingKeys: String, CodingKey {
-        case played = "Played", playbackPositionTicks = "PlaybackPositionTicks"
+        case played = "Played"
+        case playbackPositionTicks = "PlaybackPositionTicks"
         case lastPlayedDate = "LastPlayedDate"
-        case playedPercentage = "PlayedPercentage", unplayedItemCount = "UnplayedItemCount"
+        case playedPercentage = "PlayedPercentage"
+        case unplayedItemCount = "UnplayedItemCount"
     }
 }
 
 public enum JellyfinImageType: String, Sendable {
-    case primary = "Primary", backdrop = "Backdrop", logo = "Logo"
+    case primary = "Primary"
+    case backdrop = "Backdrop"
+    case logo = "Logo"
 }
 
 public struct VideoPage: Decodable, Sendable {
     public let items: [VideoItem]
     public let totalCount: Int
-    enum CodingKeys: String, CodingKey { case items = "Items", totalCount = "TotalRecordCount" }
+    enum CodingKeys: String, CodingKey {
+        case items = "Items"
+        case totalCount = "TotalRecordCount"
+    }
 }
 
 public struct PlaybackStream: Sendable {
@@ -145,15 +164,24 @@ public struct PlaybackSubtitle: Identifiable, Sendable {
 }
 
 public enum JellyfinError: LocalizedError {
-    case invalidAddress, unauthorized, serverStatus(Int), invalidResponse, noPlayableSource, unsafeStreamURL
+    case invalidAddress, unauthorized, forbidden
+    case serverStatus(Int)
+    case invalidResponse, noPlayableSource, unsafeStreamURL
 
     public var errorDescription: String? {
         switch self {
-        case .invalidAddress: return "Enter a valid http:// or https:// server address, without a username, password, or query string."
+        case .invalidAddress:
+            return "Enter a valid http:// or https:// server address, without a username, password, or query string."
         case .unauthorized: return "The server rejected your credentials or your session expired. Sign in again."
-        case .serverStatus(let code): return "The Jellyfin server returned HTTP \(code). Please check the server and try again."
-        case .invalidResponse: return "The server returned an unexpected response. Check that the address points to Jellyfin."
-        case .noPlayableSource: return "No compatible video stream is available. The Jellyfin user may need permission to transcode videos."
+        case .forbidden:
+            return
+                "Your Jellyfin account doesn't have permission for this action. Check its access settings on the server."
+        case .serverStatus(let code):
+            return "The Jellyfin server returned HTTP \(code). Please check the server and try again."
+        case .invalidResponse:
+            return "The server returned an unexpected response. Check that the address points to Jellyfin."
+        case .noPlayableSource:
+            return "No compatible video stream is available. The Jellyfin user may need permission to transcode videos."
         case .unsafeStreamURL: return "The server supplied a stream address outside this Jellyfin server."
         }
     }

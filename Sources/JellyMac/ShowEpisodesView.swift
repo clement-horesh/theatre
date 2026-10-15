@@ -8,6 +8,7 @@ struct ShowEpisodesView: View {
     @State private var selectedSeasonID: String?
     @State private var episodes: [VideoItem] = []
     @State private var total = 0
+    @State private var nextOffset = 0
     @State private var isLoadingSeasons = false
     @State private var isLoadingEpisodes = false
     @State private var seasonError: String?
@@ -32,7 +33,7 @@ struct ShowEpisodesView: View {
                         Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
                     }
                     .padding(.horizontal, 14).padding(.vertical, 8)
-                    .modifier(SeasonSelectorGlass())
+                    .glassSurface(in: Capsule(), interactive: true)
                     .contentShape(Capsule())
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
@@ -43,12 +44,13 @@ struct ShowEpisodesView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 18) {
                     ForEach(episodes) { episode in
-                        EpisodeMediaCard(episode: episode, client: model.client, isPreparing: model.isStartingPlayback) { fromBeginning in
+                        EpisodeMediaCard(episode: episode, client: model.client, isPreparing: model.isStartingPlayback)
+                        { fromBeginning in
                             model.play(episode, startFromBeginning: fromBeginning)
                         }
                         .frame(width: 300, height: 284)
                     }
-                    if episodes.count < total {
+                    if nextOffset < total {
                         Button("Load more episodes") { Task { await loadEpisodes(reset: false) } }
                             .disabled(isLoadingEpisodes).padding(20)
                     }
@@ -63,7 +65,8 @@ struct ShowEpisodesView: View {
                     Button("Retry") { retry += 1 }
                 }
             } else if !isLoadingSeasons && !isLoadingEpisodes && episodes.isEmpty {
-                Text(seasons.isEmpty ? "No seasons available." : "No episodes available for this season.").foregroundStyle(.secondary)
+                Text(seasons.isEmpty ? "No seasons available." : "No episodes available for this season.")
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -97,23 +100,22 @@ struct ShowEpisodesView: View {
         generation = requestGeneration
         isLoadingEpisodes = true
         episodeError = nil
-        if reset { episodes = []; total = 0 }
+        if reset {
+            episodes = []
+            total = 0
+            nextOffset = 0
+        }
         defer { if generation == requestGeneration { isLoadingEpisodes = false } }
         do {
-            let page = try await client.episodes(seriesID: series.id, seasonID: seasonID, startIndex: episodes.count)
+            let page = try await client.episodes(seriesID: series.id, seasonID: seasonID, startIndex: nextOffset)
             try Task.checkCancellation()
             guard generation == requestGeneration, selectedSeasonID == seasonID else { return }
-            episodes.append(contentsOf: page.items.filter { incoming in !episodes.contains { $0.id == incoming.id } })
+            nextOffset = page.items.isEmpty ? page.totalCount : nextOffset + page.items.count
+            var ids = Set(episodes.map(\.id))
+            episodes.append(contentsOf: page.items.filter { ids.insert($0.id).inserted })
             total = page.totalCount
         } catch {
             if !Task.isCancelled && generation == requestGeneration { episodeError = "Episodes couldn’t be loaded." }
         }
-    }
-}
-
-private struct SeasonSelectorGlass: ViewModifier {
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) { content.glassEffect(.regular.interactive(), in: Capsule()) }
-        else { content.background(.ultraThinMaterial, in: Capsule()) }
     }
 }

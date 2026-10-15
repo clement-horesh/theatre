@@ -6,8 +6,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if model.client == nil { login.padding() }
-            else { MovieLibraryView(model: model) }
+            if model.client == nil { login.padding() } else { MovieLibraryView(model: model) }
         }
     }
 
@@ -27,8 +26,13 @@ struct ContentView: View {
             HStack {
                 Button("Connect") { model.connect() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(model.isConnecting || model.address.isEmpty || model.username.trimmingCharacters(in: .whitespaces).isEmpty)
-                if model.isConnecting { ProgressView().controlSize(.small); Text("Connecting…") }
+                    .disabled(
+                        model.isConnecting || model.address.isEmpty
+                            || model.username.trimmingCharacters(in: .whitespaces).isEmpty)
+                if model.isConnecting {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting…")
+                }
             }
         }
         .frame(maxWidth: 480)

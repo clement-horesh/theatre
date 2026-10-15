@@ -12,28 +12,30 @@ struct JellyMacApp: App {
                 .preferredColorScheme(.dark)
                 .modifier(PageFullscreenNavigation())
         }
-            .defaultSize(width: 1100, height: 700)
-            .windowStyle(.hiddenTitleBar)
-            .windowToolbarStyle(.unified)
-            .commands {
-                CommandGroup(replacing: .newItem) {}
-                JellyfinCommands(model: model)
-                CommandMenu("Playback") {
-                    Button("Play/Pause") { model.togglePlayback() }
-                        .keyboardShortcut(.space, modifiers: [])
-                        .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
-                    Button("Back 10 Seconds") { model.playback.seek(by: -10) }
-                        .keyboardShortcut(.leftArrow, modifiers: [])
-                        .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
-                    Button("Forward 10 Seconds") { model.playback.seek(by: 10) }
-                        .keyboardShortcut(.rightArrow, modifiers: [])
-                        .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
-                    Divider()
-                    Button(model.isVideoFullscreen ? "Exit Video Full Screen" : "Enter Video Full Screen") { model.toggleVideoFullscreen() }
-                        .keyboardShortcut("f", modifiers: [])
-                        .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
+        .defaultSize(width: 1100, height: 700)
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified)
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+            JellyfinCommands(model: model)
+            CommandMenu("Playback") {
+                Button("Play/Pause") { model.togglePlayback() }
+                    .keyboardShortcut(.space, modifiers: [])
+                    .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
+                Button("Back 10 Seconds") { model.playback.seek(by: -10) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                    .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
+                Button("Forward 10 Seconds") { model.playback.seek(by: 10) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                    .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
+                Divider()
+                Button(model.isVideoFullscreen ? "Exit Video Full Screen" : "Enter Video Full Screen") {
+                    model.toggleVideoFullscreen()
                 }
+                .keyboardShortcut("f", modifiers: [])
+                .disabled(model.currentVideo == nil || !model.isPlayerWindowKey)
             }
+        }
         Window("Jellyfin Informations", id: "jellyfin-information") {
             JellyfinInformationView(model: model)
                 .preferredColorScheme(.dark)

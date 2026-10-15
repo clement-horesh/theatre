@@ -9,12 +9,16 @@ struct EpisodeMediaCard: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            Button { onPlay(false) } label: {
+            Button {
+                onPlay(false)
+            } label: {
                 GeometryReader { geometry in
                     ZStack(alignment: .bottomLeading) {
-                        JellyfinArtwork(request: (try? client?.imageRequest(for: episode, type: .primary, maxWidth: 900))
-                                        ?? (try? client?.imageRequest(for: episode, type: .backdrop, maxWidth: 900)),
-                                        progressBlurHeight: 215, progressBlurRadius: 24) {
+                        JellyfinArtwork(
+                            request: (try? client?.imageRequest(for: episode, type: .primary, maxWidth: 900))
+                                ?? (try? client?.imageRequest(for: episode, type: .backdrop, maxWidth: 900)),
+                            progressBlurHeight: 215, progressBlurRadius: 24
+                        ) {
                             Color(white: 0.12)
                         }
                         .frame(width: geometry.size.width, height: geometry.size.height).clipped()
@@ -24,7 +28,8 @@ struct EpisodeMediaCard: View {
                             HStack(spacing: 6) {
                                 Text(episode.name).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                                 if episode.isInProgress || episode.isUnwatched {
-                                    Circle().fill(episode.isInProgress ? Color.yellow : Color.blue).frame(width: 5, height: 5)
+                                    Circle().fill(episode.isInProgress ? Color.yellow : Color.blue).frame(
+                                        width: 5, height: 5)
                                 }
                             }
                             Text(episode.overview.flatMap { $0.isEmpty ? nil : $0 } ?? "No description available.")
@@ -42,8 +47,10 @@ struct EpisodeMediaCard: View {
                                         }
                                         .frame(width: 28, height: 4)
                                 }
-                                Text(episode.isInProgress ? episode.remainingTimeLabel : (episode.runtimeLabel ?? "Play"))
-                                    .font(.system(size: 12, weight: .semibold))
+                                Text(
+                                    episode.isInProgress ? episode.remainingTimeLabel : (episode.runtimeLabel ?? "Play")
+                                )
+                                .font(.system(size: 12, weight: .semibold))
                                 Spacer(minLength: 26)
                             }
                             .padding(.top, 5).frame(height: 24)

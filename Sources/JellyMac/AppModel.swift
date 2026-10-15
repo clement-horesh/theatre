@@ -1,13 +1,19 @@
-import Combine
 import AppKit
+import Combine
 import Foundation
 import JellyfinKit
 
 enum LibrarySection: String, CaseIterable, Identifiable {
-    case home = "Home", shows = "Shows", movies = "Movies"
+    case home = "Home"
+    case shows = "Shows"
+    case movies = "Movies"
     var id: String { rawValue }
     var itemTypes: [String] {
-        switch self { case .home: return []; case .shows: return ["Series"]; case .movies: return ["Movie"] }
+        switch self {
+        case .home: return []
+        case .shows: return ["Series"]
+        case .movies: return ["Movie"]
+        }
     }
 }
 
@@ -37,7 +43,6 @@ final class AppModel: ObservableObject {
     @Published var isPlayerWindowKey = false
     @Published var errorMessage: String?
     @Published private(set) var playbackError: String?
-    @Published private(set) var reportWarning: String?
     let playback = VLCPlaybackController()
 
     private var playerWindow: PlayerWindowController?
@@ -46,21 +51,28 @@ final class AppModel: ObservableObject {
     private var playbackTask: Task<Void, Never>?
     private var loadGeneration = UUID()
     private var connectionGeneration = UUID()
-    private var lastReportSeconds = -10.0
-    private var hasReportedStart = false
+    private let playbackReporter = PlaybackReporter()
+    private var nextVideoOffset = 0
+    private var nextResumeOffset = 0
     private weak var fullscreenWindow: NSWindow?
     private var windowObservers: [NSObjectProtocol] = []
     private let sessionStore: any SessionStore
     private let defaults: UserDefaults
+    private let transport: URLSession
 
-    init(sessionStore: (any SessionStore)? = nil, defaults: UserDefaults = .standard) {
+    init(
+        sessionStore: (any SessionStore)? = nil, defaults: UserDefaults = .standard,
+        transport: URLSession? = nil
+    ) {
         self.defaults = defaults
-        self.sessionStore = sessionStore ?? KeychainSessionStore()
+        self.transport = transport ?? Self.makeTransport()
+        self.sessionStore = sessionStore ?? KeychainSessionStore(defaults: defaults)
         address = defaults.string(forKey: "serverAddress") ?? ""
         do {
             if let saved = try self.sessionStore.load() {
-                client = try JellyfinClient(address: saved.address, deviceID: saved.deviceID,
-                                            transport: Self.makeTransport(), session: saved.session)
+                client = try JellyfinClient(
+                    address: saved.address, deviceID: saved.deviceID,
+                    transport: self.transport, session: saved.session)
                 address = saved.address
                 username = saved.session.username
             }
@@ -71,28 +83,46 @@ final class AppModel: ObservableObject {
             guard let self, self.stream?.videoAspectRatio == nil else { return }
             self.playerWindow?.fitVideo(aspectRatio: size.width / size.height)
         }
-        windowObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.willEnterFullScreenNotification,
-                                                                       object: nil, queue: .main) { [weak self] note in
-            MainActor.assumeIsolated {
-                guard let self, self.currentVideo != nil, let window = note.object as? NSWindow,
-                      window === self.playerWindow?.window || window === self.fullscreenWindow else { return }
-                self.fullscreenWindow = window
-                self.isVideoFullscreen = true
-            }
-        })
-        windowObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification,
-                                                                       object: nil, queue: .main) { [weak self] note in
-            MainActor.assumeIsolated {
-                guard let self, let window = note.object as? NSWindow, window === self.fullscreenWindow else { return }
-                self.isVideoFullscreen = false
-                self.fullscreenWindow = nil
-            }
-        })
+        windowObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willEnterFullScreenNotification,
+                object: nil, queue: .main
+            ) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, self.currentVideo != nil, let window = note.object as? NSWindow,
+                        window === self.playerWindow?.window || window === self.fullscreenWindow
+                    else { return }
+                    self.fullscreenWindow = window
+                    self.isVideoFullscreen = true
+                }
+            })
+        windowObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didExitFullScreenNotification,
+                object: nil, queue: .main
+            ) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, let window = note.object as? NSWindow, window === self.fullscreenWindow else {
+                        return
+                    }
+                    self.isVideoFullscreen = false
+                    self.fullscreenWindow = nil
+                }
+            })
+    }
+
+    deinit {
+        connectionTask?.cancel()
+        playbackTask?.cancel()
+        windowObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     func toggleVideoFullscreen() {
         guard currentVideo != nil else { return }
-        if isVideoFullscreen { exitVideoFullscreen(); return }
+        if isVideoFullscreen {
+            exitVideoFullscreen()
+            return
+        }
         guard let window = playerWindow?.window else { return }
         fullscreenWindow = window
         isVideoFullscreen = true
@@ -110,10 +140,13 @@ final class AppModel: ObservableObject {
     }
 
     var displayedUsername: String { client?.session?.username ?? "" }
-    var canLoadMore: Bool { videos.count < totalCount && !isLoading }
+    var canLoadMore: Bool { nextVideoOffset < totalCount && !isLoading }
+    var canLoadMoreResume: Bool { nextResumeOffset < resumeTotalCount }
 
     func progressVideo(for video: VideoItem) -> VideoItem {
-        if video.type == "Series", let episode = resumeVideos.first(where: { $0.seriesID == video.id }) { return episode }
+        if video.type == "Series", let episode = resumeVideos.first(where: { $0.seriesID == video.id }) {
+            return episode
+        }
         return video
     }
 
@@ -125,7 +158,9 @@ final class AppModel: ObservableObject {
     }
 
     func connect() {
-        let server = address, user = username.trimmingCharacters(in: .whitespacesAndNewlines), secret = password
+        let server = address
+        let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = password
         guard !isConnecting, !user.isEmpty else { return }
         connectionTask?.cancel()
         isConnecting = true
@@ -134,18 +169,24 @@ final class AppModel: ObservableObject {
         connectionGeneration = generation
         connectionTask = Task {
             do {
-                let unauthenticated = try JellyfinClient(address: server, deviceID: deviceID,
-                                                         transport: Self.makeTransport())
+                let unauthenticated = try JellyfinClient(
+                    address: server, deviceID: deviceID,
+                    transport: transport)
                 let session = try await unauthenticated.authenticate(username: user, password: secret)
                 try Task.checkCancellation()
                 guard connectionGeneration == generation else { return }
                 client = try unauthenticated.authenticated(with: session)
                 do {
-                    try sessionStore.save(SavedSession(address: unauthenticated.serverURL.absoluteString,
-                                                       deviceID: deviceID, session: session))
+                    try sessionStore.save(
+                        SavedSession(
+                            address: unauthenticated.serverURL.absoluteString,
+                            deviceID: deviceID, session: session))
                     sessionWarning = nil
-                } catch { sessionWarning = "Connected, but Keychain couldn't save your sign-in. You may need to sign in next time." }
-                defaults.set(server, forKey: "serverAddress")
+                } catch {
+                    sessionWarning =
+                        "Connected, but Keychain couldn't save your sign-in. You may need to sign in next time."
+                }
+                defaults.set(unauthenticated.serverURL.absoluteString, forKey: "serverAddress")
                 password = ""
                 search = ""
                 librarySection = .home
@@ -158,64 +199,86 @@ final class AppModel: ObservableObject {
     }
 
     func loadVideos(reset: Bool = true) async {
-        guard let client else { return }
+        guard let client, !Task.isCancelled else { return }
         if !reset && isLoading { return }
+        let section = librarySection
+        let query = search
         let generation = UUID()
         loadGeneration = generation
         isLoading = true
         errorMessage = nil
-        if reset { videos = []; recentlyAddedVideos = []; recentContinueMovies = []; totalCount = 0; isLoadingResume = false }
+        defer { if loadGeneration == generation { isLoading = false } }
+        if reset {
+            videos = []
+            recentlyAddedVideos = []
+            recentContinueMovies = []
+            totalCount = 0
+            nextVideoOffset = 0
+            isLoadingResume = false
+        }
         do {
-            let page = try await client.videos(startIndex: reset ? 0 : videos.count, search: search,
-                                               itemTypes: librarySection.itemTypes)
+            let page = try await client.videos(startIndex: nextVideoOffset, search: query, itemTypes: section.itemTypes)
             try Task.checkCancellation()
-            guard loadGeneration == generation else { return }
-            videos.append(contentsOf: page.items.filter { incoming in !videos.contains { $0.id == incoming.id } })
+            guard isCurrentLoad(generation, section: section, query: query) else { return }
+            nextVideoOffset = page.items.isEmpty ? page.totalCount : nextVideoOffset + page.items.count
+            var ids = Set(videos.map(\.id))
+            videos.append(contentsOf: page.items.filter { ids.insert($0.id).inserted })
             totalCount = page.totalCount
-            if reset, librarySection != .movies {
+            if reset, section != .movies {
                 let resume = try? await client.resumeVideos()
-                guard loadGeneration == generation else { return }
+                try Task.checkCancellation()
+                guard isCurrentLoad(generation, section: section, query: query) else { return }
                 resumeVideos = resume?.items ?? page.items.filter(\.isInProgress)
                 resumeTotalCount = resume?.totalCount ?? resumeVideos.count
+                nextResumeOffset = resume?.items.count ?? resumeVideos.count
             }
-            if reset, librarySection == .home, search.isEmpty {
+            if reset, section == .home, query.isEmpty {
                 async let recentPage = client.recentlyAddedTitles(limit: 30)
                 async let continuePage = client.resumeVideos(limit: 5, itemTypes: ["Movie"])
                 let recent = try await recentPage
                 let continuing = try? await continuePage
                 try Task.checkCancellation()
-                guard loadGeneration == generation else { return }
+                guard isCurrentLoad(generation, section: section, query: query) else { return }
                 recentlyAddedVideos = recent
                 recentContinueMovies = continuing?.items ?? Array(resumeVideos.filter { $0.type == "Movie" }.prefix(5))
             }
         } catch is CancellationError {
         } catch {
-            if loadGeneration == generation {
+            if !Task.isCancelled, isCurrentLoad(generation, section: section, query: query) {
                 if case JellyfinError.unauthorized = error {
                     signOut()
                     errorMessage = "Your Jellyfin session expired. Please sign in again."
-                } else { errorMessage = Self.friendly(error) }
+                } else {
+                    errorMessage = Self.friendly(error)
+                }
             }
         }
-        if loadGeneration == generation {
-            isLoading = false
-            if reset, librarySection == .home, search.isEmpty { homeRecommendationRevision += 1 }
+        if isCurrentLoad(generation, section: section, query: query), !Task.isCancelled {
+            if reset, section == .home, query.isEmpty { homeRecommendationRevision += 1 }
         }
     }
 
+    private func isCurrentLoad(_ generation: UUID, section: LibrarySection, query: String) -> Bool {
+        loadGeneration == generation && librarySection == section && search == query
+    }
+
     func loadMoreResumeVideos() async {
-        guard let client, !isLoadingResume, resumeVideos.count < resumeTotalCount else { return }
+        guard let client, !isLoadingResume, canLoadMoreResume else { return }
         let generation = loadGeneration
         isLoadingResume = true
         defer { if loadGeneration == generation { isLoadingResume = false } }
         do {
-            let page = try await client.resumeVideos(startIndex: resumeVideos.count)
+            let page = try await client.resumeVideos(startIndex: nextResumeOffset)
             try Task.checkCancellation()
             guard loadGeneration == generation else { return }
-            resumeVideos.append(contentsOf: page.items.filter { item in !resumeVideos.contains { $0.id == item.id } })
+            nextResumeOffset = page.items.isEmpty ? page.totalCount : nextResumeOffset + page.items.count
+            var ids = Set(resumeVideos.map(\.id))
+            resumeVideos.append(contentsOf: page.items.filter { ids.insert($0.id).inserted })
             resumeTotalCount = page.totalCount
         } catch {
-            if loadGeneration == generation { errorMessage = "More unfinished titles couldn't be loaded. Please try again." }
+            if !Task.isCancelled, loadGeneration == generation {
+                errorMessage = "More unfinished titles couldn't be loaded. Please try again."
+            }
         }
     }
 
@@ -226,12 +289,15 @@ final class AppModel: ObservableObject {
             let titles = try await client.recentlyAddedTitles(limit: 30)
             try Task.checkCancellation()
             guard loadGeneration == generation, self.client?.session?.accessToken == client.session?.accessToken,
-                  librarySection == .home, search.isEmpty else { return }
+                librarySection == .home, search.isEmpty
+            else { return }
             if titles != recentlyAddedVideos {
                 recentlyAddedVideos = titles
                 homeRecommendationRevision += 1
             }
-        } catch { /* A background refresh keeps the last confirmed library visible. */ }
+        } catch {
+            // A background refresh keeps the last confirmed library visible.
+        }
     }
 
     func play(_ video: VideoItem, compatibleOnly: Bool = false, startFromBeginning: Bool = false) {
@@ -267,8 +333,11 @@ final class AppModel: ObservableObject {
     func retryCompatible() { if let currentVideo { play(currentVideo, compatibleOnly: true) } }
 
     func togglePlayback() {
-        if playback.hasEnded, let currentVideo { play(currentVideo, startFromBeginning: true) }
-        else { playback.togglePlayback() }
+        if playback.hasEnded, let currentVideo {
+            play(currentVideo, startFromBeginning: true)
+        } else {
+            playback.togglePlayback()
+        }
     }
 
     func stopPlayback(leaveFullscreen: Bool = true, closeWindow: Bool = true) {
@@ -276,11 +345,13 @@ final class AppModel: ObservableObject {
             isVideoFullscreen = false
             fullscreenWindow = nil
         }
-        playbackTask?.cancel(); playbackTask = nil
+        playbackTask?.cancel()
+        playbackTask = nil
         finishPlayback()
         playback.stop()
-        currentVideo = nil; playbackError = nil; reportWarning = nil
-        isStartingPlayback = false; lastReportSeconds = -10; hasReportedStart = false
+        currentVideo = nil
+        playbackError = nil
+        isStartingPlayback = false
         if closeWindow {
             let controller = playerWindow
             playerWindow = nil
@@ -303,56 +374,79 @@ final class AppModel: ObservableObject {
         loadGeneration = UUID()
         let previous = client
         client = nil
-        videos = []; resumeVideos = []; recentlyAddedVideos = []; recentContinueMovies = []; resumeTotalCount = 0; isLoadingResume = false; totalCount = 0; search = ""
-        password = ""; errorMessage = nil
-        isConnecting = false; isLoading = false
-        sessionWarning = nil; librarySection = .home
+        videos = []
+        resumeVideos = []
+        recentlyAddedVideos = []
+        recentContinueMovies = []
+        resumeTotalCount = 0
+        isLoadingResume = false
+        totalCount = 0
+        search = ""
+        nextVideoOffset = 0
+        nextResumeOffset = 0
+        password = ""
+        errorMessage = nil
+        isConnecting = false
+        isLoading = false
+        sessionWarning = nil
+        librarySection = .home
         ArtworkCache.shared.clear()
         address = defaults.string(forKey: "serverAddress") ?? ""
-        Task { try? await previous?.logout() }
+        let pendingReport = playbackReporter.pendingTask
+        Task {
+            _ = try? await pendingReport?.value
+            try? await previous?.logout()
+        }
     }
 
     private func reportProgress(seconds: Double, paused: Bool) {
-        guard seconds.isFinite, seconds > 0, let client, let stream else { return }
-        let event: PlaybackEvent
-        if !hasReportedStart { hasReportedStart = true; event = .started }
-        else if abs(seconds - lastReportSeconds) >= 10 { event = .progress }
-        else { return }
-        lastReportSeconds = seconds
-        Task {
-            do { try await client.reportPlayback(event, stream: stream, seconds: seconds, paused: paused) }
-            catch { if self.stream?.playSessionID == stream.playSessionID { reportWarning = "Playback works, but Jellyfin couldn't save playback progress." } }
-        }
+        guard let client, let stream else { return }
+        _ = playbackReporter.progress(client: client, stream: stream, seconds: seconds, paused: paused)
     }
 
     private func finishPlayback() {
         guard let client, let stream else { return }
         let seconds = playback.seconds
         self.stream = nil
+        let report = playbackReporter.stop(client: client, stream: stream, seconds: seconds)
         Task {
             do {
-                try await client.reportPlayback(.stopped, stream: stream, seconds: seconds)
+                try await report.value
                 guard self.client?.session?.accessToken == client.session?.accessToken else { return }
                 let updated = try await client.item(id: stream.itemID)
-                guard self.client?.session?.accessToken == client.session?.accessToken else { return }
+                guard self.client?.session?.accessToken == client.session?.accessToken
+                else { return }
                 if let index = videos.firstIndex(where: { $0.id == updated.id }) { videos[index] = updated }
-                if let index = recentlyAddedVideos.firstIndex(where: { $0.id == updated.id }) { recentlyAddedVideos[index] = updated }
+                if let index = recentlyAddedVideos.firstIndex(where: { $0.id == updated.id }) {
+                    recentlyAddedVideos[index] = updated
+                }
                 if updated.type == "Episode", let seriesID = updated.seriesID,
-                   let show = try? await client.item(id: seriesID) {
-                    guard self.client?.session?.accessToken == client.session?.accessToken else { return }
+                    let show = try? await client.item(id: seriesID)
+                {
+                    guard self.client?.session?.accessToken == client.session?.accessToken
+                    else { return }
                     if let index = videos.firstIndex(where: { $0.id == seriesID }) { videos[index] = show }
-                    if let index = recentlyAddedVideos.firstIndex(where: { $0.id == seriesID }) { recentlyAddedVideos[index] = show }
+                    if let index = recentlyAddedVideos.firstIndex(where: { $0.id == seriesID }) {
+                        recentlyAddedVideos[index] = show
+                    }
                 }
                 if librarySection != .movies, let resume = try? await client.resumeVideos() {
-                    guard self.client?.session?.accessToken == client.session?.accessToken else { return }
-                    resumeVideos = resume.items; resumeTotalCount = resume.totalCount
+                    guard self.client?.session?.accessToken == client.session?.accessToken
+                    else { return }
+                    resumeVideos = resume.items
+                    resumeTotalCount = resume.totalCount
+                    nextResumeOffset = resume.items.count
                 }
-                if librarySection == .home, let movies = try? await client.resumeVideos(limit: 5, itemTypes: ["Movie"]) {
-                    guard self.client?.session?.accessToken == client.session?.accessToken else { return }
+                if librarySection == .home, let movies = try? await client.resumeVideos(limit: 5, itemTypes: ["Movie"])
+                {
+                    guard self.client?.session?.accessToken == client.session?.accessToken
+                    else { return }
                     recentContinueMovies = movies.items
                 }
                 playbackRevision += 1
-            } catch { /* Leave the last server-confirmed state visible until a refresh. */ }
+            } catch {
+                // Leave the last server-confirmed state visible until a refresh.
+            }
         }
     }
 
@@ -367,7 +461,8 @@ final class AppModel: ObservableObject {
         if let error = error as? URLError {
             switch error.code {
             case .cannotConnectToHost, .cannotFindHost, .notConnectedToInternet, .networkConnectionLost:
-                return "Couldn't reach the Jellyfin server. Check the address, network connection, and local network access."
+                return
+                    "Couldn't reach the Jellyfin server. Check the address, network connection, and local network access."
             case .timedOut: return "The server took too long to respond. Please try again."
             case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate:
                 return "The server's HTTPS connection could not be verified. Check its certificate."

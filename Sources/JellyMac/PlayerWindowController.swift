@@ -9,9 +9,10 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
 
     init(model: AppModel) {
         self.model = model
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: false)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -19,8 +20,9 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         window.collectionBehavior = [.fullScreenPrimary]
         super.init(window: window)
         window.delegate = self
-        window.contentView = NSHostingView(rootView: PlayerPane(model: model, playback: model.playback)
-            .ignoresSafeArea().onExitCommand { model.exitVideoFullscreen() })
+        window.contentView = NSHostingView(
+            rootView: PlayerPane(model: model, playback: model.playback)
+                .ignoresSafeArea().onExitCommand { model.exitVideoFullscreen() })
         window.center()
     }
 
@@ -39,13 +41,15 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         window.contentAspectRatio = .zero
         window.aspectRatio = NSSize(width: videoAspectRatio, height: 1)
         let screen = (window.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let width = min(window.isVisible ? window.frame.width : 960, screen.width * 0.85,
-                        screen.height * 0.85 * videoAspectRatio)
+        let width = min(
+            window.isVisible ? window.frame.width : 960, screen.width * 0.85,
+            screen.height * 0.85 * videoAspectRatio)
         let size = NSSize(width: width, height: width / videoAspectRatio)
         let minimumWidth = min(480, 200 * videoAspectRatio, width)
         window.minSize = NSSize(width: minimumWidth, height: minimumWidth / videoAspectRatio)
-        var frame = NSRect(x: window.frame.midX - size.width / 2,
-                           y: window.frame.midY - size.height / 2, width: size.width, height: size.height)
+        var frame = NSRect(
+            x: window.frame.midX - size.width / 2,
+            y: window.frame.midY - size.height / 2, width: size.width, height: size.height)
         frame.origin.x = max(screen.minX, min(frame.minX, screen.maxX - size.width))
         frame.origin.y = max(screen.minY, min(frame.minY, screen.maxY - size.height))
         window.setFrame(frame, display: true)
@@ -55,8 +59,9 @@ final class PlayerWindowController: NSWindowController, NSWindowDelegate {
         guard !changingFullscreen, !sender.styleMask.contains(.fullScreen) else { return frameSize }
         let widthChange = abs(frameSize.width - sender.frame.width)
         let heightChange = abs(frameSize.height - sender.frame.height) * videoAspectRatio
-        let width = max(sender.minSize.width,
-                        widthChange >= heightChange ? frameSize.width : frameSize.height * videoAspectRatio)
+        let width = max(
+            sender.minSize.width,
+            widthChange >= heightChange ? frameSize.width : frameSize.height * videoAspectRatio)
         return NSSize(width: width, height: width / videoAspectRatio)
     }
 

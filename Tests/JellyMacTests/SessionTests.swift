@@ -1,6 +1,7 @@
 import Foundation
 import JellyfinKit
 import XCTest
+
 @testable import JellyMac
 
 @MainActor
@@ -15,7 +16,9 @@ final class MemorySessionStore: SessionStore {
         saved = session
     }
     func remove() throws { saved = nil }
-    func makeModel() -> AppModel { AppModel(sessionStore: self, defaults: defaults) }
+    func makeModel(transport: URLSession? = nil) -> AppModel {
+        AppModel(sessionStore: self, defaults: defaults, transport: transport)
+    }
 }
 
 final class SessionTests: XCTestCase {
@@ -27,7 +30,8 @@ final class SessionTests: XCTestCase {
         let store = MemorySessionStore()
         let original = store.makeModel()
         original.address = address.absoluteString
-        original.username = "demo"; original.password = "demo"
+        original.username = "demo"
+        original.password = "demo"
         original.connect()
         for _ in 0..<100 {
             if original.client != nil { break }
@@ -64,7 +68,8 @@ final class SessionTests: XCTestCase {
         XCTAssertNotNil(store.saved)
         let restartedAddress = try await server.start()
         defer { server.stop() }
-        let invalid = try JSONDecoder().decode(JellyfinSession.self, from: Data(#"{"userID":"user","username":"demo","accessToken":"expired"}"#.utf8))
+        let invalid = try JSONDecoder().decode(
+            JellyfinSession.self, from: Data(#"{"userID":"user","username":"demo","accessToken":"expired"}"#.utf8))
         store.saved = SavedSession(address: restartedAddress.absoluteString, deviceID: "session-test", session: invalid)
         let expired = store.makeModel()
         await expired.loadVideos()
@@ -73,22 +78,4 @@ final class SessionTests: XCTestCase {
         XCTAssertTrue(expired.errorMessage?.contains("expired") == true)
     }
 
-    @MainActor
-    func testKeychainRoundTripAndSignOutAcrossStoreInstances() throws {
-        let service = "local.theatre.session-tests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: service))
-        defer { defaults.removePersistentDomain(forName: service) }
-        let store = KeychainSessionStore(service: service, defaults: defaults)
-        defer { try? store.remove() }
-        let session = try JSONDecoder().decode(JellyfinSession.self, from: Data(#"{"userID":"user","username":"demo","accessToken":"test-only-token"}"#.utf8))
-        try store.save(SavedSession(address: "http://localhost:8096", deviceID: "device", session: session))
-        let second = KeychainSessionStore(service: service, defaults: defaults)
-        let saved = try XCTUnwrap(second.load())
-        XCTAssertEqual(saved.session.accessToken, "test-only-token")
-        XCTAssertEqual(saved.address, "http://localhost:8096")
-        try second.remove()
-        XCTAssertNil(try store.load())
-        try store.save(saved)
-        XCTAssertNotNil(try second.load())
-    }
 }

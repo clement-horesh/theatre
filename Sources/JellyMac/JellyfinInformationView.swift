@@ -16,19 +16,23 @@ struct JellyfinInformationView: View {
                     .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Jellyfin Informations").font(.title2.weight(.semibold))
-                    Label(isSignedIn ? "Signed in" : "Not signed in",
-                          systemImage: isSignedIn ? "checkmark.circle.fill" : "person.crop.circle")
-                        .font(.callout)
-                        .foregroundStyle(isSignedIn ? Color.green : Color.secondary)
+                    Label(
+                        isSignedIn ? "Signed in" : "Not signed in",
+                        systemImage: isSignedIn ? "checkmark.circle.fill" : "person.crop.circle"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(isSignedIn ? Color.green : Color.secondary)
                 }
             }
 
             VStack(alignment: .leading, spacing: 18) {
-                informationRow("Server", symbol: "network",
-                               value: serverAddress.isEmpty ? "No server configured" : serverAddress)
+                informationRow(
+                    "Server", symbol: "network",
+                    value: serverAddress.isEmpty ? "No server configured" : serverAddress)
                 Divider()
-                informationRow("Account", symbol: "person.crop.circle",
-                               value: isSignedIn ? model.displayedUsername : "Sign in to your Jellyfin server")
+                informationRow(
+                    "Account", symbol: "person.crop.circle",
+                    value: isSignedIn ? model.displayedUsername : "Sign in to your Jellyfin server")
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
