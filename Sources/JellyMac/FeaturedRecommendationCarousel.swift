@@ -83,6 +83,11 @@ struct FeaturedRecommendationCarousel: View {
                 }
             }
         }
+        .overlay {
+            if videos.count > 1 {
+                CarouselSwipeInput { move(by: $0) }
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.65), value: currentID)
