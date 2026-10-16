@@ -2,7 +2,7 @@
 
 This first beta is for **Apple Silicon Macs (M1 or later)**. The deployment target is macOS 13; hands-on validation has been on macOS 27.2. Older macOS versions have not yet been verified. Theatre requires your own Jellyfin server and account. It includes no films, shows, or server.
 
-1. Download `Theatre-0.1.0-beta.1-apple-silicon.dmg` from this repository’s GitHub Releases page.
+1. Download `Theatre-0.1.0.dmg` from this repository’s GitHub Releases page.
 2. Open the disk image and drag **Theatre** into **Applications**.
 3. Eject the disk image and open Theatre from Applications.
 4. Enter your Jellyfin server address, including `http://` or `https://` and any port or base path, then your Jellyfin username and password.
@@ -15,7 +15,7 @@ If macOS blocks the app because the developer cannot be verified, attempt to ope
 
 Only approve a download you trust. A malware warning or a failed checksum should not be bypassed. You do not need to disable Gatekeeper or change system security settings to use this documented process. Managed Macs may restrict approval.
 
-The release includes `SHA256SUMS.txt`. To check a download in Terminal, run `shasum -a 256` on the downloaded file and compare its result with that file’s entry in the checksum list.
+GitHub displays a SHA-256 digest beside each release asset. To check a download in Terminal, run `shasum -a 256` on the downloaded file and compare its result with the digest shown on GitHub.
 
 ## Updates and saved sign-in
 

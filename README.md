@@ -4,7 +4,7 @@ A native macOS Jellyfin client with a dark SwiftUI interface, Liquid Glass contr
 
 ## Public beta
 
-The first beta is packaged for **Apple Silicon Macs (M1 or later)**. Get the `.dmg` from [GitHub Releases](https://github.com/clement-horesh/mac/releases) when published. Drag Theatre into Applications and connect to your own Jellyfin server. No server or media is included.
+The first beta is packaged for **Apple Silicon Macs (M1 or later)**. Get the `.dmg` from [GitHub Releases](https://github.com/clement-horesh/theatre/releases) when published. Drag Theatre into Applications and connect to your own Jellyfin server. No server or media is included.
 
 This beta is ad-hoc signed and **not notarized by Apple**. macOS may require approval through **System Settings → Privacy & Security → Open Anyway** after the first attempted launch. See [installation instructions](INSTALL.md), [release notes](RELEASE_NOTES.md), and [privacy information](PRIVACY.md).
 
@@ -20,7 +20,7 @@ bash Scripts/build-app.sh
 
 The app is created at `dist/Theatre.app`. Packaging requires a valid Apple Development or Developer ID signing identity. If several are installed, set `THEATRE_SIGNING_IDENTITY` to the certificate fingerprint you want to use. Reuse the same identity for updates so Keychain continues recognizing the app.
 
-To build without an Apple certificate, use `bash Scripts/build-app.sh --public-beta`. This creates an ad-hoc signed app at `dist/beta/Theatre.app`, separate from the local Apple-signed build. Ad-hoc builds may require Keychain reauthorization after updates. See [release preparation](RELEASING.md) for packaging the disk image and matching source archive.
+To build without an Apple certificate, use `bash Scripts/build-app.sh --public-beta`. This creates an ad-hoc signed app at `dist/beta/Theatre.app`, separate from the local Apple-signed build. Ad-hoc builds may require Keychain reauthorization after updates. See [release preparation](RELEASING.md) for packaging the disk image and publishing the matching source tag.
 
 The setup script downloads the official VLCKit 3.7.2 macOS framework and verifies its SHA-256. It is dynamically linked, embedded, and signed with the app. See [third-party notices](Vendor/THIRD-PARTY-NOTICES.md).
 

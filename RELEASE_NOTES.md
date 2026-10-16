@@ -14,7 +14,7 @@ A native Mac client for your Jellyfin server. This first public beta is for Appl
 
 ## Installation
 
-Download **Theatre-0.1.0-beta.1-apple-silicon.dmg**, drag Theatre into Applications, and connect to your own Jellyfin server. No media or server is bundled.
+Download **Theatre-0.1.0.dmg**, drag Theatre into Applications, and connect to your own Jellyfin server. No media or server is bundled.
 
 This build is not notarized. If macOS blocks it as an unidentified developer, use Apple’s **System Settings → Privacy & Security → Open Anyway** process after attempting to open the app. Read [installation instructions](INSTALL.md) for details and limitations.
 
@@ -22,4 +22,4 @@ The build targets macOS 13 or later; hands-on validation has been on macOS 27.2.
 
 ## License and source
 
-Theatre is licensed under **GPL-3.0-only**. VLCKit and its components retain their upstream licenses; notices are included in the app. The release includes Theatre’s source archive, `Theatre-VLCKit-3.7.2-sources.tar.gz` with third-party sources, and SHA-256 checksums. See [third-party notices](Vendor/THIRD-PARTY-NOTICES.md).
+Theatre is licensed under **GPL-3.0-only**. VLCKit and its components retain their upstream licenses; notices are included in the app. GitHub provides Theatre’s source archives automatically. The release also includes `Theatre-VLCKit-3.7.2-sources.tar.gz` with third-party sources. Only the DMG is needed to install the app. See [third-party notices](Vendor/THIRD-PARTY-NOTICES.md).
