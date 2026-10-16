@@ -27,6 +27,7 @@ final class PlaybackSession: ObservableObject {
     private var systemPlaybackGeneration = UUID()
     @Published private(set) var nextEpisode: VideoItem?
     @Published private(set) var creditsStart: Double?
+    @Published private(set) var intro: MediaSegment?
     private var episodeTask: Task<Void, Never>?
     private var unusedPreparationTask: Task<Void, Never>?
     private var cleanupTask: Task<Void, Never>?
@@ -36,7 +37,20 @@ final class PlaybackSession: ObservableObject {
     var offersNextEpisode: Bool {
         nextEpisode != nil && (playback.hasEnded || creditsStart.map { playback.seconds >= $0 } == true)
     }
+    var offersSkipIntro: Bool {
+        !playback.hasEnded && playback.canSeek && intro?.contains(seconds: playback.seconds) == true
+            && (intro?.endSeconds ?? .infinity) < playback.duration
+    }
+
+    func skipIntro() {
+        guard offersSkipIntro, let end = intro?.endSeconds else { return }
+        playback.seek(to: end)
+    }
     private let playbackReporter = PlaybackReporter()
+    private enum EpisodeContext: Sendable {
+        case next(VideoItem?)
+        case markers([MediaSegment])
+    }
 
     init(preferences: PlaybackPreferences) {
         self.preferences = preferences
@@ -288,6 +302,7 @@ final class PlaybackSession: ObservableObject {
         episodeTask?.cancel()
         nextEpisode = nil
         creditsStart = nil
+        intro = nil
         presentationError = nil
         if leaveFullscreen {
             isVideoFullscreen = false
@@ -402,21 +417,33 @@ final class PlaybackSession: ObservableObject {
                 nextEpisode = next
             }
             creditsStart = record.creditsStart
+            intro = record.intro
             return
         }
         episodeTask = Task { [weak self] in
-            async let next = try? client.nextEpisode(after: video)
-            async let credits = try? client.creditsStart(itemID: video.id)
-            let nextVideo = await next
-            guard let self, !Task.isCancelled, self.currentVideo?.id == video.id else { return }
-            self.nextEpisode = nextVideo
-            if self.playback.hasEnded, self.preferences.automaticallyPlayNext {
-                self.playNextEpisode()
-                return
+            // A slow metadata endpoint must not delay intro skipping or continuation.
+            await withTaskGroup(of: EpisodeContext.self) { group in
+                group.addTask { .next(try? await client.nextEpisode(after: video)) }
+                group.addTask { .markers((try? await client.mediaSegments(itemID: video.id)) ?? []) }
+                for await context in group {
+                    guard let self, !Task.isCancelled, self.currentVideo?.id == video.id else {
+                        group.cancelAll()
+                        return
+                    }
+                    switch context {
+                    case .next(let next):
+                        self.nextEpisode = next
+                        if self.playback.hasEnded, self.preferences.automaticallyPlayNext { self.playNextEpisode() }
+                    case .markers(let markers):
+                        self.creditsStart = markers.filter { $0.type == "Outro" && $0.startTicks > 0 }.map(
+                            \.startSeconds
+                        ).min()
+                        self.intro = markers.filter { $0.type == "Intro" && $0.isSkippable }.min {
+                            $0.startTicks < $1.startTicks
+                        }
+                    }
+                }
             }
-            let start = await credits
-            guard !Task.isCancelled, self.currentVideo?.id == video.id else { return }
-            self.creditsStart = start
         }
     }
 

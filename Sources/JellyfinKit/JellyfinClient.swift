@@ -98,6 +98,39 @@ public struct JellyfinClient: Sendable {
                 ]))
     }
 
+    public func relatedTitles(itemID: String, limit: Int = 12) async throws -> [VideoItem] {
+        guard let session else { throw JellyfinError.unauthorized }
+        let page: VideoPage = try decode(
+            await request(
+                "Items/\(itemID)/Similar",
+                query: [
+                    .init(name: "userId", value: session.userID), .init(name: "limit", value: String(limit)),
+                    .init(name: "fields", value: "Overview,Genres"),
+                ]))
+        var seen = Set<String>([itemID])
+        return page.items.filter { ["Movie", "Series"].contains($0.type) && seen.insert($0.id).inserted }
+    }
+
+    public func titles(for person: VideoPerson, startIndex: Int = 0, limit: Int = 100) async throws -> VideoPage {
+        guard let session else { throw JellyfinError.unauthorized }
+        var query: [URLQueryItem] = [
+            .init(name: "userId", value: session.userID), .init(name: "includeItemTypes", value: "Movie,Series"),
+            .init(name: "recursive", value: "true"), .init(name: "isMissing", value: "false"),
+            .init(name: "isPlaceHolder", value: "false"), .init(name: "sortBy", value: "SortName"),
+            .init(name: "sortOrder", value: "Ascending"), .init(name: "enableUserData", value: "true"),
+            .init(name: "enableImages", value: "true"), .init(name: "imageTypeLimit", value: "1"),
+            .init(name: "fields", value: "Genres,SortName"), .init(name: "enableTotalRecordCount", value: "true"),
+            .init(name: "startIndex", value: String(startIndex)), .init(name: "limit", value: String(limit)),
+        ]
+        if let id = person.itemID, !id.isEmpty {
+            query.append(.init(name: "personIds", value: id))
+        } else {
+            query.append(.init(name: "person", value: person.name))
+        }
+        if let type = person.type, !type.isEmpty { query.append(.init(name: "personTypes", value: type)) }
+        return try decode(await request("Items", query: query))
+    }
+
     public func item(id: String) async throws -> VideoItem {
         guard let session else { throw JellyfinError.unauthorized }
         // Explicitly request detail collections; catalog items only contain the
@@ -233,16 +266,21 @@ public struct JellyfinClient: Sendable {
 
     /// Unsupported segment APIs and absent markers leave the early next-episode button hidden.
     public func creditsStart(itemID: String) async throws -> Double? {
+        try await mediaSegments(itemID: itemID).filter { $0.type == "Outro" && $0.startTicks > 0 }
+            .map(\.startSeconds).min()
+    }
+
+    public func mediaSegments(itemID: String) async throws -> [MediaSegment] {
+        guard session != nil else { throw JellyfinError.unauthorized }
         do {
             let page: MediaSegmentPage = try decode(
                 await request(
                     "MediaSegments/\(itemID)",
                     query: [
-                        .init(name: "includeSegmentTypes", value: "Outro")
+                        .init(name: "includeSegmentTypes", value: "Intro,Outro")
                     ]))
-            return page.items.filter { $0.type == "Outro" && $0.startTicks > 0 }
-                .map { Double($0.startTicks) / 10_000_000 }.min()
-        } catch JellyfinError.serverStatus(404) { return nil }
+            return page.items.filter { $0.startTicks >= 0 }
+        } catch JellyfinError.serverStatus(404) { return [] }
     }
 
     public func setWatched(_ watched: Bool, itemID: String) async throws {
@@ -807,12 +845,4 @@ private struct PlaybackReport: Encodable {
 private struct MediaSegmentPage: Decodable {
     let items: [MediaSegment]
     enum CodingKeys: String, CodingKey { case items = "Items" }
-}
-private struct MediaSegment: Decodable {
-    let type: String
-    let startTicks: Int64
-    enum CodingKeys: String, CodingKey {
-        case type = "Type"
-        case startTicks = "StartTicks"
-    }
 }

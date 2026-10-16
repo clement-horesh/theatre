@@ -3,12 +3,13 @@ import SwiftUI
 
 struct MovieLibraryView: View {
     @ObservedObject var model: AppModel
-    @State private var path: [VideoItem] = []
+    @State private var path = NavigationPath()
     @State private var showsSearch = false
     @State private var featuredVideos: [VideoItem] = []
     @State private var featuredColor = Color(nsColor: ArtworkColor.pageBackground)
     @State private var windowPhase = LibraryWindowPhase.windowed
     @FocusState private var searchFocused: Bool
+    @FocusState private var focusedCard: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
@@ -28,7 +29,16 @@ struct MovieLibraryView: View {
                         MovieDetailView(model: model, initialVideo: video)
                             .navigationBarBackButtonHidden(true)
                     }
+                    .navigationDestination(for: VideoPerson.self) { person in
+                        PersonDetailView(model: model, person: person).navigationBarBackButtonHidden(true)
+                    }
             }
+            .onExitCommand {
+                if showsSearch { closeSearch() } else if !path.isEmpty { path.removeLast() }
+            }
+            .environment(
+                \.libraryNavigation, LibraryNavigationActions(video: { path.append($0) }, person: { path.append($0) })
+            )
             .toolbar { navigationToolbar }
             .toolbar(.visible, for: .windowToolbar)
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -77,9 +87,12 @@ struct MovieLibraryView: View {
                 .ignoresSafeArea()
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.65), value: featuredColor)
             }
-            .onChange(of: model.librarySection) { _ in path = [] }
-            .onChange(of: model.showsDownloads) { _ in path = [] }
-            .onChange(of: model.search) { _ in path = [] }
+            .onChange(of: model.librarySection) { _ in path = NavigationPath() }
+            .onChange(of: model.showsDownloads) { _ in
+                path = NavigationPath()
+                closeSearch()
+            }
+            .onChange(of: model.search) { _ in path = NavigationPath() }
             .onChange(of: model.homeRecommendationRevision) { _ in chooseFeature() }
             .onChange(of: model.playbackRevision) { _ in chooseFeature() }
             .task(
@@ -97,6 +110,7 @@ struct MovieLibraryView: View {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     model.downloads.synchronize()
+                    model.downloads.checkLocalFiles()
                     do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { return }
                     guard !Task.isCancelled else { return }
                     if refreshesHome { await model.refreshRecentlyAddedTitles() }
@@ -167,7 +181,13 @@ struct MovieLibraryView: View {
                                     .contextMenu { WatchStatusAction(video: video, model: model) }
                                     .disabled(model.isStartingPlayback)
                                     .accessibilityLabel("Resume \(video.title)")
+                                    .accessibilityHint("Starts video playback directly")
+                                    .accessibilityValue(video.accessibleWatchStatus)
                                     .accessibilityIdentifier("continue-\(video.id)")
+                                    .libraryCardFocus(
+                                        "continue:\(video.id)", focus: $focusedCard,
+                                        items: model.resumeVideos.map { "continue:\($0.id)" }
+                                    ) { if !model.isStartingPlayback { model.play(video) } }
                                 }
                                 if model.canLoadMoreResume {
                                     Button("Load more") { Task { await model.loadMoreResumeVideos() } }
@@ -176,7 +196,7 @@ struct MovieLibraryView: View {
                             }
                             .padding(.bottom, 6)
                         }
-                        .accessibilityIdentifier("continueRow")
+                        .focusSection().accessibilityIdentifier("continueRow")
                     }
                     .padding(.top, 14)
                     VStack(alignment: .leading, spacing: 8) {
@@ -198,11 +218,15 @@ struct MovieLibraryView: View {
                                                 ? ", In progress" : (video.isUnwatched ? ", Unwatched" : ""))
                                     )
                                     .accessibilityIdentifier("recent-\(video.id)")
+                                    .libraryCardFocus(
+                                        "recent:\(video.id)", focus: $focusedCard,
+                                        items: model.recentlyAddedVideos.map { "recent:\($0.id)" }
+                                    ) { path.append(video) }
                                 }
                             }
                             .padding(.bottom, 12)
                         }
-                        .accessibilityIdentifier("recentlyAddedRow")
+                        .focusSection().accessibilityIdentifier("recentlyAddedRow")
                     }
                     .padding(.top, 14)
                 } else {
@@ -212,15 +236,22 @@ struct MovieLibraryView: View {
                                 ContinueMediaCard(video: video, client: model.client, showsPlaybackInfo: false)
                             }
                             .buttonStyle(.plain)
+                            .libraryCardFocus(
+                                video.id, focus: $focusedCard, items: model.videos.map(\.id),
+                                columns: max(1, Int((width - 30) / 298))
+                            ) { path.append(video) }
+                            .accessibilityLabel("Details for \(video.title)")
+                            .accessibilityValue(model.progressVideo(for: video).accessibleWatchStatus)
                             .contextMenu { WatchStatusAction(video: video, model: model) }
                         }
                     }
+                    .focusSection()
                 }
                 if model.canLoadMore && !model.search.isEmpty {
                     Button("Load more") { Task { await model.loadVideos(reset: false) } }
                         .frame(maxWidth: .infinity).padding(.bottom, 24)
                 }
-                if let error = model.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                if let error = model.errorMessage { LibraryConnectionIssue(model: model, message: error) }
             }
             .padding(.horizontal, 24)
             .padding(.top, showsFeature ? 8 : 24)
@@ -382,6 +413,8 @@ struct MoviePoster: View {
     let video: VideoItem
     let client: JellyfinClient?
     var progressVideo: VideoItem? = nil
+    @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var statusVideo: VideoItem { progressVideo ?? video }
 
@@ -398,8 +431,15 @@ struct MoviePoster: View {
                             Image(systemName: "film").font(.system(size: 32)).foregroundStyle(.secondary)
                         }
                     }
+                    .scaleEffect(hovered && !reduceMotion ? 1.035 : 1)
+                    .offset(y: hovered && !reduceMotion ? -2 : 0)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(.white.opacity(hovered ? 0.22 : 0), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
                 .accessibilityHidden(true)
             WatchStatusTitle(video: video, progressVideo: statusVideo).font(.callout.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)
@@ -408,6 +448,8 @@ struct MoviePoster: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: hovered)
     }
 }
 

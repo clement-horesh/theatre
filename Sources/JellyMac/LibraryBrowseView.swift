@@ -8,6 +8,10 @@ extension VideoItem {
         guard let first = title.first, first.isASCII, first >= "A", first <= "Z" else { return "#" }
         return String(first)
     }
+    var libraryMetadata: String {
+        [productionYear.map { String($0) }, genres?.prefix(2).joined(separator: " · ")]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
 }
 
 private enum LibraryLayout: String, CaseIterable {
@@ -25,6 +29,10 @@ struct LibraryBrowseView: View {
     @State private var filterError: String?
     @State private var requestedLetter: String?
     @State private var jumpID = UUID()
+    @State private var gridColumns = 1
+    @State private var hoveredRow: String?
+    @FocusState private var focusedCard: String?
+    @Environment(\.libraryNavigation) private var navigation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let alphabet = ["#"] + (65...90).compactMap { UnicodeScalar($0).map(String.init) }
 
@@ -71,6 +79,7 @@ struct LibraryBrowseView: View {
                 HStack(spacing: 0) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
+                            if downloaded { DownloadTransfersView(downloads: model.downloads) }
                             ForEach(sections, id: \.self) { section in
                                 VStack(alignment: .leading, spacing: 16) {
                                     if !section.isEmpty { Text(section).font(.title2.weight(.semibold)) }
@@ -101,7 +110,7 @@ struct LibraryBrowseView: View {
                                 }
                             }
                             if !downloaded, let error = model.errorMessage {
-                                Text(error).foregroundStyle(.red).textSelection(.enabled)
+                                LibraryConnectionIssue(model: model, message: error)
                             }
                         }
                         .padding(.horizontal, 24).padding(.bottom, 48).id("libraryTop")
@@ -138,7 +147,12 @@ struct LibraryBrowseView: View {
             }
         }
         .task(id: "\(model.librarySection.rawValue):\(downloaded)") {
-            if downloaded { model.downloads.synchronize() } else { await loadFilterOptions() }
+            if downloaded {
+                model.downloads.checkLocalFiles()
+                model.downloads.synchronize()
+            } else {
+                await loadFilterOptions()
+            }
         }
     }
 
@@ -157,6 +171,17 @@ struct LibraryBrowseView: View {
                 .buttonStyle(.plain)
                 .contextMenu { WatchStatusAction(video: video, model: model) }
                 .accessibilityLabel("Details for \(video.title)")
+                .accessibilityValue(model.progressVideo(for: video).accessibleWatchStatus)
+                .libraryCardFocus(video.id, focus: $focusedCard, items: videos.map(\.id), columns: gridColumns) {
+                    navigation.video(video)
+                }
+            }
+        }
+        .focusSection()
+        .background {
+            GeometryReader { geometry in
+                Color.clear.onAppear { gridColumns = max(1, Int((geometry.size.width + 24) / 174)) }
+                    .onChange(of: geometry.size.width) { gridColumns = max(1, Int(($0 + 24) / 174)) }
             }
         }
     }
@@ -168,32 +193,17 @@ struct LibraryBrowseView: View {
                 Section {
                     ForEach(grouped[letter] ?? []) { video in
                         NavigationLink(value: video) {
-                            HStack(spacing: 16) {
-                                JellyfinArtwork(
-                                    request: try? model.client?.imageRequest(for: video, type: .primary, maxWidth: 120)
-                                ) {
-                                    Color.secondary.opacity(0.12).overlay { Image(systemName: "film") }
-                                }
-                                .frame(width: 48, height: 72).clipShape(RoundedRectangle(cornerRadius: 5))
-                                VStack(alignment: .leading, spacing: 6) {
-                                    WatchStatusTitle(video: video, progressVideo: model.progressVideo(for: video))
-                                        .font(.body.weight(.medium))
-                                    Text(
-                                        [
-                                            video.productionYear.map(String.init),
-                                            video.genres?.prefix(2).joined(separator: " · "),
-                                        ]
-                                        .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-                                    )
-                                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                                    if downloaded { DownloadStatus(downloads: model.downloads, video: video) }
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                            }
-                            .padding(.vertical, 10).contentShape(Rectangle())
+                            alphabeticalRow(video)
                         }
                         .buttonStyle(.plain)
+                        .onHover { hovering in
+                            if hovering { hoveredRow = video.id } else if hoveredRow == video.id { hoveredRow = nil }
+                        }
+                        .libraryCardFocus(video.id, focus: $focusedCard, items: videos.map(\.id)) {
+                            navigation.video(video)
+                        }
+                        .accessibilityLabel("Details for \(video.title)")
+                        .accessibilityValue(model.progressVideo(for: video).accessibleWatchStatus)
                         .contextMenu { WatchStatusAction(video: video, model: model) }
                         Divider()
                     }
@@ -205,6 +215,32 @@ struct LibraryBrowseView: View {
                 }
             }
         }
+    }
+
+    private func alphabeticalRow(_ video: VideoItem) -> some View {
+        HStack(spacing: 16) {
+            JellyfinArtwork(
+                request: try? model.client?.imageRequest(for: video, type: .primary, maxWidth: 120)
+            ) {
+                Color.secondary.opacity(0.12).overlay { Image(systemName: "film") }
+            }
+            .frame(width: 48, height: 72).clipShape(RoundedRectangle(cornerRadius: 5))
+            VStack(alignment: .leading, spacing: 6) {
+                WatchStatusTitle(video: video, progressVideo: model.progressVideo(for: video))
+                    .font(.body.weight(.medium))
+                Text(video.libraryMetadata)
+                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                if downloaded { DownloadStatus(downloads: model.downloads, video: video) }
+            }
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 10).contentShape(Rectangle())
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.white.opacity(hoveredRow == video.id ? 0.07 : 0))
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hoveredRow == video.id)
     }
 
     private var letterIndex: some View {

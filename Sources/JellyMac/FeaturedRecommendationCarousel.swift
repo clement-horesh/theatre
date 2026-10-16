@@ -15,12 +15,17 @@ struct FeaturedRecommendationCarousel: View {
     @State private var restartClock = UUID()
     @State private var colors: [String: NSColor] = [:]
     @State private var details: [String: VideoItem] = [:]
+    @FocusState private var keyboardFocused: Bool
+    @Environment(\.libraryNavigation) private var navigation
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var current: VideoItem? { videos.isEmpty ? nil : videos[min(index, videos.count - 1)] }
     private var currentID: String? { current?.id }
-    private var rotating: Bool { isActive && scenePhase == .active && videos.count > 1 }
+    private var rotating: Bool {
+        isActive && scenePhase == .active && videos.count > 1 && !keyboardFocused
+            && !NSWorkspace.shared.isVoiceOverEnabled
+    }
     private var rotationKey: String { "\(videos.map(\.id)):\(restartClock):\(rotating)" }
 
     var body: some View {
@@ -65,8 +70,8 @@ struct FeaturedRecommendationCarousel: View {
                     Spacer()
                     arrow("chevron.right", label: "Next recommendation", offset: 1)
                 }
-                .opacity(hovered ? 1 : 0)
-                .allowsHitTesting(hovered)
+                .opacity(hovered || keyboardFocused ? 1 : 0)
+                .allowsHitTesting(hovered || keyboardFocused)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: hovered)
                 VStack {
                     Spacer()
@@ -96,6 +101,25 @@ struct FeaturedRecommendationCarousel: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .focusable().focused($keyboardFocused)
+        .overlay {
+            RoundedRectangle(cornerRadius: 18).strokeBorder(keyboardFocused ? Color.accentColor : .clear, lineWidth: 3)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
+        .onMoveCommand { direction in
+            guard keyboardFocused else { return }
+            if direction == .left { move(by: -1) } else if direction == .right { move(by: 1) }
+        }
+        .onCommand(#selector(NSResponder.insertNewline(_:))) {
+            if keyboardFocused, let current { navigation.video(current) }
+        }
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: move(by: 1)
+            case .decrement: move(by: -1)
+            @unknown default: break
+            }
+        }
         .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.65), value: currentID)
         .onHover { hovered = $0 }
         .simultaneousGesture(

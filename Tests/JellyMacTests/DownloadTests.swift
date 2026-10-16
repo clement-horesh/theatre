@@ -48,6 +48,17 @@ final class DownloadTests: XCTestCase {
 
         let reopened = DownloadManager(root: root)
         reopened.configure(client: client)
+        let store = MemorySessionStore()
+        store.saved = SavedSession(
+            address: client.serverURL.absoluteString, deviceID: client.deviceID, session: try XCTUnwrap(client.session))
+        let suite = "local.theatre.offline-tests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = AppModel(sessionStore: store, defaults: defaults, downloads: reopened)
+        model.showsDownloads = true
+        await model.loadVideos()
+        XCTAssertNotNil(model.client, "Offline launch must restore the saved session without reauthentication")
+        XCTAssertEqual(model.downloads.titles.map(\.id), [video.id])
         let stream = try XCTUnwrap(reopened.playbackStream(for: video))
         XCTAssertTrue(stream.url.isFileURL)
         XCTAssertEqual(
@@ -148,6 +159,76 @@ final class DownloadTests: XCTestCase {
         XCTAssertTrue(downloads.record(for: video)?.error?.contains("isn’t allowed") == true)
         XCTAssertNil(downloads.playbackStream(for: video))
         await downloads.shutdown()
+    }
+
+    @MainActor
+    func testLowStorageCanBeRetriedAndRemovedFilesCanBeDownloadedAgain() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let server = PlaybackFixtureServer(mediaDirectory: fixtures)
+        let client = try await signedIn(server)
+        defer { server.stop() }
+        let page = try await client.videos(search: "h264-aac.mp4")
+        let video = try XCTUnwrap(page.items.first)
+        var free: Int64 = 0
+        let downloads = DownloadManager(root: root, availableSpace: { free })
+        downloads.configure(client: client)
+        downloads.start(video)
+        try await waitUntil { downloads.record(for: video)?.state == .failed }
+        XCTAssertTrue(downloads.record(for: video)?.error?.contains("storage") == true)
+        XCTAssertNil(downloads.playbackStream(for: video))
+        free = 4 * 1024 * 1024
+        downloads.start(video)
+        try await waitUntil { downloads.record(for: video)?.state == .complete }
+        let file = try XCTUnwrap(downloads.playbackStream(for: video)).url
+        try FileManager.default.removeItem(at: file)
+        downloads.checkLocalFiles()
+        XCTAssertEqual(downloads.record(for: video)?.state, .failed)
+        XCTAssertEqual(downloads.record(for: video)?.received, 0)
+        downloads.start(video)
+        try await waitUntil { downloads.record(for: video)?.state == .complete }
+        XCTAssertEqual(
+            try Data(contentsOf: file), try Data(contentsOf: fixtures.appendingPathComponent("h264-aac.mp4")))
+        await downloads.shutdown()
+    }
+
+    @MainActor
+    func testInterruptedDownloadRetriesAfterTheServerReturnsAndAppRelaunches() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = root.appendingPathComponent("source")
+        try FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        let data = Data(repeating: 42, count: 8 * 1024 * 1024)
+        try data.write(to: media.appendingPathComponent("large.mp4"))
+        let server = PlaybackFixtureServer(mediaDirectory: media, chunkDelay: 0.04)
+        let client = try await signedIn(server)
+        defer { server.stop() }
+        let page = try await client.videos()
+        let video = try XCTUnwrap(page.items.first)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 1
+        let catalog = root.appendingPathComponent("downloads")
+        let downloads = DownloadManager(root: catalog, configuration: configuration)
+        downloads.configure(client: client)
+        downloads.start(video)
+        try await waitUntil { (downloads.record(for: video)?.received ?? 0) > 0 }
+        server.stop()
+        try await waitUntil { downloads.record(for: video)?.state == .failed }
+        XCTAssertNil(downloads.playbackStream(for: video))
+        await downloads.shutdown()
+        let restarted = try await server.start(port: UInt16(try XCTUnwrap(client.serverURL.port)))
+        XCTAssertEqual(restarted, client.serverURL)
+        let reopened = DownloadManager(root: catalog)
+        reopened.configure(client: client)
+        XCTAssertEqual(reopened.record(for: video)?.state, .failed)
+        reopened.start(video)
+        try await waitUntil {
+            reopened.record(for: video)?.state == .complete || reopened.record(for: video)?.state == .failed
+        }
+        XCTAssertEqual(reopened.record(for: video)?.state, .complete, reopened.record(for: video)?.error ?? "")
+        let file = try XCTUnwrap(reopened.playbackStream(for: video)).url
+        XCTAssertEqual(try Data(contentsOf: file), data)
+        await reopened.shutdown()
     }
     @MainActor
     func testOfflineShowsAreGroupedAndProgressIsScopedAndSyncedWithoutLosingRemovedItems() async throws {

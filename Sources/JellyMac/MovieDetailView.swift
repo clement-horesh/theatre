@@ -8,6 +8,7 @@ struct MovieDetailView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showPlayback: ShowPlaybackSelection?
+    @State private var relatedTitles: [VideoItem] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openWindow) private var openWindow
 
@@ -63,6 +64,9 @@ struct MovieDetailView: View {
                                 openWindow(value: trailer)
                             }
                             MovieCastSection(video: video, client: model.client, width: geometry.size.width - 80)
+                            if !model.showsDownloads && !relatedTitles.isEmpty {
+                                RelatedTitlesSection(model: model, titles: relatedTitles)
+                            }
                             MovieAboutSection(video: video, width: geometry.size.width - 80)
                                 .id("movieAbout")
                             MovieInformationSection(video: video, width: geometry.size.width - 80)
@@ -87,6 +91,7 @@ struct MovieDetailView: View {
             }
             guard let client = model.client else { return }
             isLoading = true
+            async let related = try? client.relatedTitles(itemID: initialVideo.id)
             errorMessage = nil
             showPlayback = nil
             do {
@@ -116,7 +121,11 @@ struct MovieDetailView: View {
                     }
                 }
             }
-            if !Task.isCancelled { isLoading = false }
+            let recommendations = await related
+            if !Task.isCancelled {
+                relatedTitles = recommendations ?? []
+                isLoading = false
+            }
         }
     }
 }

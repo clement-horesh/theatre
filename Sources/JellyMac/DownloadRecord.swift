@@ -17,6 +17,7 @@ struct DownloadRecord: Codable, Identifiable {
     var subtitles: [Subtitle] = []
     var nextEpisodeID: String?
     var creditsStart: Double?
+    var intro: MediaSegment?
     var progress: Progress?
 
     struct Subtitle: Codable {
@@ -31,6 +32,7 @@ struct DownloadRecord: Codable, Identifiable {
         var pendingSync = true
     }
     var isActive: Bool { state == .preparing || state == .downloading }
+    var remainingBytes: Int64 { max(0, expected) - min(max(0, received), max(0, expected)) }
     var displayedVideo: VideoItem {
         var snapshot = video
         if let progress { snapshot.userData = progress.data }

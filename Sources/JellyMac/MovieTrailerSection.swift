@@ -5,6 +5,7 @@ struct MovieTrailerSection: View {
     let video: VideoItem
     let client: JellyfinClient?
     let onPlay: (TrailerPresentation) -> Void
+    @FocusState private var focusedTrailer: String?
 
     private var trailer: TrailerPresentation? {
         guard let first = video.remoteTrailers?.first, let url = first.webURL else { return nil }
@@ -19,6 +20,12 @@ struct MovieTrailerSection: View {
                 Text("Trailers").font(.title2.weight(.semibold))
                 TrailerCard(trailer: trailer, video: video, client: client) { onPlay(trailer) }
                     .frame(width: 320, height: 226)
+                    .focusable()
+                    .libraryCardFocus(
+                        trailer.url.absoluteString, focus: $focusedTrailer, items: [trailer.url.absoluteString]
+                    ) {
+                        onPlay(trailer)
+                    }
                     .padding(.bottom, 8)
                     .accessibilityIdentifier("movieTrailers")
             }

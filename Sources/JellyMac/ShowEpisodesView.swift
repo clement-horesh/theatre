@@ -16,6 +16,7 @@ struct ShowEpisodesView: View {
     @State private var episodeError: String?
     @State private var generation = UUID()
     @State private var retry = 0
+    @FocusState private var focusedEpisode: String?
 
     private var selectedSeason: SeasonOption? { seasons.first { $0.id == selectedSeasonID } }
     private var savedSeasonNumbers: [Int] {
@@ -62,6 +63,10 @@ struct ShowEpisodesView: View {
                             model.play(episode, startFromBeginning: fromBeginning)
                         }
                         .frame(width: 300, height: 284)
+                        .focusable()
+                        .libraryCardFocus(episode.id, focus: $focusedEpisode, items: visibleEpisodes.map(\.id)) {
+                            if !model.isStartingPlayback { model.play(episode) }
+                        }
                     }
                     if !model.showsDownloads && !usesSavedEpisodes && nextOffset < total {
                         Button("Load more episodes") { Task { await loadEpisodes(reset: false) } }
@@ -71,6 +76,7 @@ struct ShowEpisodesView: View {
                 .padding(.bottom, 8)
             }
             .accessibilityIdentifier("seasonEpisodes")
+            .focusSection()
             .id(selectedSeasonID)
             if let errorMessage {
                 HStack {

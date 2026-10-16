@@ -86,9 +86,25 @@ final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unchecked S
     }
 }
 
-enum JellyfinDownloadError: LocalizedError {
+enum JellyfinDownloadError: LocalizedError, Equatable {
     case permission, signIn, invalidFile, diskSpace
     case http(Int)
+    static func message(for error: Error) -> String {
+        let value = error as NSError
+        if value.domain == NSCocoaErrorDomain, value.code == NSFileWriteOutOfSpaceError {
+            return Self.diskSpace.localizedDescription
+        }
+        if value.domain == NSURLErrorDomain {
+            switch value.code {
+            case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorCannotConnectToHost,
+                NSURLErrorCannotFindHost, NSURLErrorTimedOut:
+                return
+                    "The connection to Jellyfin was interrupted. Your download is kept; choose Retry when the server is available."
+            default: break
+            }
+        }
+        return error.localizedDescription
+    }
     var errorDescription: String? {
         switch self {
         case .permission: "Downloading isn’t allowed for this Jellyfin account or title."

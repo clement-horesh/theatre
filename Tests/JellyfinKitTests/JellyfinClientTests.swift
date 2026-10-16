@@ -25,6 +25,68 @@ final class JellyfinClientTests: XCTestCase {
         try JSONDecoder().decode(VideoItem.self, from: Data(#"{"Id":"video-1","Name":"Movie","Type":"Movie"}"#.utf8))
     }
 
+    func testRelatedTitlesUseJellyfinsRankingAndExcludeSelfDuplicatesAndEpisodes() async throws {
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/jellyfin/Items/current/Similar")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertEqual(query.first { $0.name == "userId" }?.value, "user-1")
+            XCTAssertEqual(query.first { $0.name == "limit" }?.value, "12")
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.contains("secret-token") == true)
+            return (
+                200,
+                #"{"Items":[{"Id":"current","Name":"Current","Type":"Movie"},{"Id":"movie","Name":"Related","Type":"Movie"},{"Id":"movie","Name":"Duplicate","Type":"Movie"},{"Id":"episode","Name":"Episode","Type":"Episode"},{"Id":"show","Name":"Related Show","Type":"Series"}],"TotalRecordCount":5}"#
+            )
+        }
+        let result = try await client().relatedTitles(itemID: "current")
+        XCTAssertEqual(result.map(\.id), ["movie", "show"])
+    }
+
+    func testFilmographyUsesPersonIdentityRoleAndServerPaginationWithNameFallback() async throws {
+        for json in [#"{"Id":"actor-1","Name":"Actor","Type":"Actor"}"#, #"{"Name":"Actor","Type":"Director"}"#] {
+            let person = try JSONDecoder().decode(VideoPerson.self, from: Data(json.utf8))
+            StubProtocol.handler = { request in
+                XCTAssertEqual(request.url?.path, "/jellyfin/Items")
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertEqual(query.first { $0.name == "personIds" }?.value, person.itemID)
+                XCTAssertEqual(query.first { $0.name == "person" }?.value, person.itemID == nil ? person.name : nil)
+                XCTAssertEqual(query.first { $0.name == "personTypes" }?.value, person.type)
+                XCTAssertEqual(query.first { $0.name == "includeItemTypes" }?.value, "Movie,Series")
+                XCTAssertEqual(query.first { $0.name == "startIndex" }?.value, "100")
+                XCTAssertEqual(query.first { $0.name == "enableUserData" }?.value, "true")
+                XCTAssertEqual(query.first { $0.name == "userId" }?.value, "user-1")
+                return (200, #"{"Items":[{"Id":"movie","Name":"Movie","Type":"Movie"}],"TotalRecordCount":101}"#)
+            }
+            let page = try await client().titles(for: person, startIndex: 100)
+            XCTAssertEqual(page.items.first?.id, "movie")
+            XCTAssertEqual(page.totalCount, 101)
+        }
+    }
+
+    func testIntroMarkersHaveRealBoundsAndNeverSkipUnknownOrInvalidIntervals() async throws {
+        StubProtocol.handler = { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertEqual(query.first { $0.name == "includeSegmentTypes" }?.value, "Intro,Outro")
+            return (
+                200,
+                #"{"Items":[{"Type":"Intro","StartTicks":100000000,"EndTicks":600000000},{"Type":"Intro","StartTicks":700000000},{"Type":"Intro","StartTicks":800000000,"EndTicks":700000000},{"Type":"Intro","StartTicks":-1,"EndTicks":10000000}]}"#
+            )
+        }
+        let markers = try await client().mediaSegments(itemID: "episode")
+        XCTAssertEqual(markers.count, 3)
+        let intro = try XCTUnwrap(markers.first)
+        XCTAssertFalse(intro.contains(seconds: 9.9))
+        XCTAssertTrue(intro.contains(seconds: 10))
+        XCTAssertTrue(intro.contains(seconds: 59.9))
+        XCTAssertFalse(intro.contains(seconds: 60))
+        XCTAssertFalse(intro.contains(seconds: .nan))
+        XCTAssertEqual(intro.endSeconds, 60)
+        XCTAssertFalse(markers[1].isSkippable)
+        XCTAssertFalse(markers[2].isSkippable)
+        StubProtocol.handler = { _ in (404, "") }
+        let missing = try await client().mediaSegments(itemID: "episode")
+        XCTAssertTrue(missing.isEmpty)
+    }
+
     func testLoginUsesJellyfinBodyAndPreservesReverseProxyPath() async throws {
         StubProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/jellyfin/Users/AuthenticateByName")

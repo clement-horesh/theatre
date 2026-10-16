@@ -1,6 +1,6 @@
 import Foundation
 
-public struct VideoPerson: Codable, Identifiable, Sendable, Equatable {
+public struct VideoPerson: Codable, Identifiable, Sendable, Hashable {
     public let itemID: String?
     public let name: String
     public let role: String?

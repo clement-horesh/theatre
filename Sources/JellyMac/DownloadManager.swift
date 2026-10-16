@@ -20,8 +20,10 @@ final class DownloadManager: ObservableObject {
     private var syncTask: Task<Void, Never>?
     private var generation = UUID()
     private var catalogReadable = true
+    private let availableSpace: (() -> Int64?)?
 
-    init(root: URL? = nil, configuration: URLSessionConfiguration = .ephemeral) {
+    init(root: URL? = nil, configuration: URLSessionConfiguration = .ephemeral, availableSpace: (() -> Int64?)? = nil) {
+        self.availableSpace = availableSpace
         self.root =
             root
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -86,11 +88,8 @@ final class DownloadManager: ObservableObject {
             records = try JSONDecoder().decode([DownloadRecord].self, from: Data(contentsOf: manifest))
             for index in records.indices {
                 if records[index].isActive || records[index].state == .pausing { records[index].state = .paused }
-                if records[index].state == .complete, localFile(records[index]) == nil {
-                    records[index].state = .failed
-                    records[index].error = "The downloaded file was removed. Download it again."
-                }
             }
+            checkLocalFiles()
             registerArtwork()
         } catch {
             catalogReadable = false
@@ -143,11 +142,34 @@ final class DownloadManager: ObservableObject {
     var storageURL: URL { directory ?? root }
     var usedBytes: Int64 { records.reduce(0) { $0 + $1.received } }
     var availableBytes: Int64? {
+        if let availableSpace { return availableSpace() }
         let location =
             directory.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             ?? root.deletingLastPathComponent()
         return (try? FileManager.default.attributesOfFileSystem(forPath: location.path)[.systemFreeSize] as? NSNumber)?
             .int64Value
+    }
+
+    func checkLocalFiles() {
+        var changed = false
+        for index in records.indices where records[index].state == .complete && localFile(records[index]) == nil {
+            records[index].state = .failed
+            records[index].error = "The downloaded file was removed. Download it again."
+            records[index].received = 0
+            changed = true
+        }
+        if changed { save() }
+    }
+
+    private func checkStorage(for record: DownloadRecord) throws {
+        guard let free = availableBytes else { return }
+        let reserved = records.filter { $0.id != record.id && $0.isActive }.reduce(Int64(0)) {
+            let sum = $0.addingReportingOverflow($1.remainingBytes)
+            return sum.overflow ? Int64.max : sum.partialValue
+        }
+        if record.remainingBytes > max(0, free - min(max(0, free), reserved)) {
+            throw JellyfinDownloadError.diskSpace
+        }
     }
 
     func playbackStream(for video: VideoItem) -> PlaybackStream? {
@@ -176,6 +198,7 @@ final class DownloadManager: ObservableObject {
         guard catalogReadable, let client, let directory, video.type == "Movie" || video.type == "Episode" else {
             return
         }
+        checkLocalFiles()
         if let existing = record(for: video),
             existing.isActive || existing.state == .pausing || existing.state == .complete
         {
@@ -211,11 +234,12 @@ final class DownloadManager: ObservableObject {
                 guard self.generation == current, let record = self.records.first(where: { $0.id == id }) else {
                     return
                 }
-                if let free = self.availableBytes, record.expected - record.received > free {
-                    throw JellyfinDownloadError.diskSpace
-                }
                 let resumeURL = folder.appendingPathComponent("resume.data")
                 let resumeData = try? Data(contentsOf: resumeURL)
+                if resumeData == nil { self.update(id) { $0.received = 0 } }
+                if let currentRecord = self.records.first(where: { $0.id == id }) {
+                    try self.checkStorage(for: currentRecord)
+                }
                 let token = UUID()
                 let transfer = DownloadTransfer(
                     id: token, request: try client.downloadRequest(itemID: video.id), resumeData: resumeData,
@@ -239,6 +263,23 @@ final class DownloadManager: ObservableObject {
                             }
                             try? FileManager.default.removeItem(at: resumeURL)
                         case .failure(let error):
+                            // Native resume data can expire, or contain an old session header.
+                            // Retry once with the current authenticated request and a fresh file.
+                            let nativeError = error as NSError
+                            if resumeData != nil,
+                                (nativeError.domain == NSURLErrorDomain
+                                    && [NSURLErrorCannotOpenFile, NSURLErrorFileDoesNotExist, NSURLErrorUnknown]
+                                        .contains(nativeError.code))
+                                    || (error as? JellyfinDownloadError) == .signIn
+                            {
+                                try? FileManager.default.removeItem(at: resumeURL)
+                                self.update(id) {
+                                    $0.state = .paused
+                                    $0.received = 0
+                                }
+                                self.start(video)
+                                return
+                            }
                             if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                                 try? data.write(to: resumeURL, options: .atomic)
                             } else {
@@ -246,7 +287,7 @@ final class DownloadManager: ObservableObject {
                             }
                             self.update(id) {
                                 $0.state = .failed
-                                $0.error = error.localizedDescription
+                                $0.error = JellyfinDownloadError.message(for: error)
                             }
                         }
                     })
@@ -259,7 +300,7 @@ final class DownloadManager: ObservableObject {
                 self.preparations[id] = nil
                 self.update(id) {
                     $0.state = .failed
-                    $0.error = error.localizedDescription
+                    $0.error = JellyfinDownloadError.message(for: error)
                 }
             }
         }
@@ -391,19 +432,20 @@ final class DownloadManager: ObservableObject {
             $0.videoFile = "video.\(safeExtension)"
             $0.expected = source?.size ?? 0
         }
-        if let free = availableBytes, (source?.size ?? 0) > free { throw JellyfinDownloadError.diskSpace }
+        if let record = records.first(where: { $0.id == id }) { try checkStorage(for: record) }
         if let seriesID = detail.seriesID {
             let series = try await client.item(id: seriesID)
             try Task.checkCancellation()
             guard generation == current else { throw CancellationError() }
             update(id) { $0.series = series }
             let next = try? await client.nextEpisode(after: detail)
-            let credits = try? await client.creditsStart(itemID: detail.id)
+            let markers = (try? await client.mediaSegments(itemID: detail.id)) ?? []
             try Task.checkCancellation()
             guard generation == current else { throw CancellationError() }
             update(id) {
                 $0.nextEpisodeID = next?.id
-                $0.creditsStart = credits
+                $0.creditsStart = markers.filter { $0.type == "Outro" && $0.startTicks > 0 }.map(\.startSeconds).min()
+                $0.intro = markers.filter { $0.type == "Intro" && $0.isSkippable }.min { $0.startTicks < $1.startTicks }
             }
         }
         guard let record = records.first(where: { $0.id == id }) else { throw CancellationError() }

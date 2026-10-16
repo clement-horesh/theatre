@@ -68,6 +68,7 @@ struct EpisodeMediaCard: View {
             }
             .buttonStyle(.plain).disabled(!canPlay)
             .accessibilityLabel((episode.isInProgress ? "Resume " : "Play ") + episode.title)
+            .accessibilityValue(episode.accessibleWatchStatus)
             Menu {
                 Button(episode.isInProgress ? "Resume" : "Play") { onPlay(false) }.disabled(!canPlay)
                 if episode.isInProgress { Button("Play from Beginning") { onPlay(true) }.disabled(!canPlay) }

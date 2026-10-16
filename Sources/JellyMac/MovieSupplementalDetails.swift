@@ -5,6 +5,8 @@ struct MovieCastSection: View {
     let video: VideoItem
     let client: JellyfinClient?
     let width: CGFloat
+    @FocusState private var focusedPerson: String?
+    @Environment(\.libraryNavigation) private var navigation
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -13,23 +15,30 @@ struct MovieCastSection: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 22) {
                         ForEach(people) { person in
-                            VStack(spacing: 8) {
-                                JellyfinArtwork(request: try? client?.imageRequest(for: person)) {
-                                    ZStack {
-                                        Color(white: 0.17)
-                                        Image(systemName: "person.fill").font(.system(size: 42)).foregroundStyle(
-                                            .white.opacity(0.4))
+                            NavigationLink(value: person) {
+                                VStack(spacing: 8) {
+                                    JellyfinArtwork(request: try? client?.imageRequest(for: person)) {
+                                        ZStack {
+                                            Color(white: 0.17)
+                                            Image(systemName: "person.fill").font(.system(size: 42)).foregroundStyle(
+                                                .white.opacity(0.4))
+                                        }
                                     }
+                                    .frame(width: portraitSize, height: portraitSize).clipShape(Circle())
+                                    Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                                        .frame(height: 34, alignment: .top)
+                                    Text(person.credit).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                                        .frame(height: 32, alignment: .top)
                                 }
-                                .frame(width: portraitSize, height: portraitSize).clipShape(Circle())
-                                Text(person.name).font(.system(size: 13, weight: .medium)).lineLimit(2)
-                                    .frame(height: 34, alignment: .top)
-                                Text(person.credit).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
-                                    .frame(height: 32, alignment: .top)
+                                .frame(width: portraitSize).multilineTextAlignment(.center)
                             }
-                            .frame(width: portraitSize).multilineTextAlignment(.center)
+                            .buttonStyle(.plain)
+                            .libraryCardFocus(person.id, focus: $focusedPerson, items: people.map(\.id)) {
+                                navigation.person(person)
+                            }
                             .accessibilityElement(children: .ignore)
                             .accessibilityLabel(person.name + (person.credit.isEmpty ? "" : ", " + person.credit))
+                            .accessibilityHint("View titles in your library featuring \(person.name)")
                         }
                     }
                     .padding(.bottom, 6)
@@ -38,7 +47,7 @@ struct MovieCastSection: View {
                 Text("Cast information isn’t available for this title.").foregroundStyle(.secondary)
             }
         }
-        .accessibilityIdentifier("movieCast")
+        .focusSection().accessibilityIdentifier("movieCast")
     }
     private var portraitSize: CGFloat { min(160, max(112, width * 0.09)) }
 }

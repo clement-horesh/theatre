@@ -49,11 +49,13 @@ final class PlaybackFixtureServer: @unchecked Sendable {
     }
 
     @MainActor
-    func start() async throws -> URL {
+    func start(port: UInt16? = nil) async throws -> URL {
         if let address { return address }
         try FileManager.default.createDirectory(at: mediaDirectory, withIntermediateDirectories: true)
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        parameters.allowLocalEndpointReuse = true
+        parameters.requiredLocalEndpoint = .hostPort(
+            host: "127.0.0.1", port: port.flatMap(NWEndpoint.Port.init(rawValue:)) ?? .any)
         let listener = try NWListener(using: parameters)
         self.listener = listener
         listener.newConnectionHandler = { [weak self] connection in

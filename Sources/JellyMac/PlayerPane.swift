@@ -9,9 +9,13 @@ struct PlayerPane: View {
     @State private var scrubSeconds = 0.0
     @State private var isScrubbing = false
     @State private var showsSubtitleAppearance = false
+    @FocusState private var focusedControl: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var isActivelyPlaying: Bool {
         playback.isPlaying && !playback.hasEnded && playback.errorMessage == nil && model.playbackError == nil
+    }
+    private var controlsVisible: Bool {
+        chrome.isVisible || focusedControl != nil || NSWorkspace.shared.isVoiceOverEnabled
     }
 
     var body: some View {
@@ -27,17 +31,22 @@ struct PlayerPane: View {
             .onTapGesture(count: 2) { model.toggleVideoFullscreen() }
             .onTapGesture { showControls() }
             playerControls
-                .opacity(chrome.isVisible ? 1 : 0)
-                .allowsHitTesting(chrome.isVisible)
-                .accessibilityHidden(!chrome.isVisible)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: chrome.isVisible)
-            if model.offersNextEpisode {
+                .opacity(controlsVisible ? 1 : 0)
+                .allowsHitTesting(controlsVisible)
+                .accessibilityHidden(!controlsVisible)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controlsVisible)
+            if model.offersNextEpisode || model.offersSkipIntro {
                 VStack {
                     Spacer()
                     HStack {
                         Spacer()
-                        GlassPlayButton(resume: false, disabled: model.isStartingPlayback, title: "Next Episode") {
-                            model.playNextEpisode()
+                        if model.offersSkipIntro {
+                            GlassPlayButton(title: "Skip Intro") { model.skipIntro() }
+                                .accessibilityHint("Skip to the end of the introduction")
+                        } else {
+                            GlassPlayButton(resume: false, disabled: model.isStartingPlayback, title: "Next Episode") {
+                                model.playNextEpisode()
+                            }
                         }
                     }
                 }
@@ -66,7 +75,7 @@ struct PlayerPane: View {
         .background {
             GeometryReader { geometry in
                 PlayerCursorVisibility(
-                    controlsHidden: !chrome.isVisible, hidesCursor: isActivelyPlaying,
+                    controlsHidden: !controlsVisible, hidesCursor: isActivelyPlaying,
                     onActivity: { chrome.pointerEnteredWindow(isPlaying: isActivelyPlaying) },
                     onWindowExit: {
                         if !model.isVideoFullscreen { chrome.pointerExitedWindow() }
@@ -78,6 +87,7 @@ struct PlayerPane: View {
         .onAppear { showControls() }
         .onDisappear { chrome.cancel() }
         .onChange(of: playback.isPlaying) { _ in showControls() }
+        .onChange(of: focusedControl) { _ in showControls() }
         .onChange(of: playback.hasEnded) { _ in showControls() }
         .onChange(of: playback.errorMessage) { _ in showControls() }
         .onChange(of: model.currentVideo?.id) { _ in showControls() }
@@ -151,6 +161,7 @@ struct PlayerPane: View {
                 transportButton(
                     playback.isPlaying ? "Pause" : (playback.hasEnded ? "Replay" : "Play"),
                     symbol: playback.isPlaying ? "pause.fill" : "play.fill", diameter: 72, symbolSize: 30,
+                    focusID: "playPause",
                     disabled: model.isStartingPlayback || playback.isPreparing
                 ) { model.togglePlayback() }
                 .accessibilityIdentifier("playPause")
@@ -174,6 +185,7 @@ struct PlayerPane: View {
                     }), in: 0...100
             )
             .frame(width: 92).controlSize(.small).accessibilityLabel("Volume")
+            .focused($focusedControl, equals: "volume")
             Image(systemName: playback.volume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 .font(.system(size: 16)).frame(width: 22)
         }
@@ -192,6 +204,7 @@ struct PlayerPane: View {
                     .frame(width: 19, height: 17).frame(width: 30, height: 28).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .focused($focusedControl, equals: "pictureInPicture")
             .disabled(
                 model.isPreparingSystemPlayback || model.isStartingPlayback
                     || playback.applePlayback.player.isExternalPlaybackActive
@@ -206,6 +219,7 @@ struct PlayerPane: View {
                 }
             )
             .frame(width: 30, height: 28)
+            .focused($focusedControl, equals: "airPlay")
             .overlay {
                 Image(systemName: "airplayvideo").font(.system(size: 17))
                     .foregroundStyle(
@@ -227,6 +241,7 @@ struct PlayerPane: View {
                 onSelect: { playback.selectSubtitle(Int32($0)) }, onTrackingChange: menuTracking,
                 onAppearance: { showsSubtitleAppearance = true }
             )
+            .focused($focusedControl, equals: "subtitles")
             .popover(isPresented: $showsSubtitleAppearance) {
                 SubtitleAppearanceView(
                     appearance: playback.subtitleAppearance,
@@ -239,14 +254,18 @@ struct PlayerPane: View {
                 symbol: "waveform", title: "Audio", identifier: "audioMenu",
                 choices: playback.audioTracks.filter { $0.id >= 0 }.map { .init(id: Int($0.id), title: $0.name) },
                 selection: Int(playback.selectedAudio), onSelect: { playback.selectAudio(Int32($0)) },
-                onTrackingChange: menuTracking)
+                onTrackingChange: menuTracking
+            )
+            .focused($focusedControl, equals: "audio")
             NativePlayerMenu(
                 symbol: "speedometer", title: "Playback speed", identifier: "speedMenu",
                 choices: [50, 75, 100, 125, 150, 200].map {
                     .init(id: $0, title: $0 == 100 ? "Normal" : String(format: "%g×", Double($0) / 100))
                 },
                 selection: Int((playback.rate * 100).rounded()),
-                onSelect: { playback.setRate(Double($0) / 100) }, onTrackingChange: menuTracking)
+                onSelect: { playback.setRate(Double($0) / 100) }, onTrackingChange: menuTracking
+            )
+            .focused($focusedControl, equals: "speed")
         }
         .padding(4).modifier(PlayerGlass(shape: .capsule))
         .onHover { chrome.setInteraction(.tracks, active: $0, isPlaying: playback.isPlaying) }
@@ -275,6 +294,7 @@ struct PlayerPane: View {
                 }
             )
             .controlSize(.small).tint(.white).disabled(!playback.canSeek).accessibilityLabel("Playback position")
+            .focused($focusedControl, equals: "timeline")
             Text("−" + clock(max(0, playback.duration - (isScrubbing ? scrubSeconds : playback.seconds))))
                 .frame(minWidth: 38, alignment: .leading)
         }
@@ -285,7 +305,7 @@ struct PlayerPane: View {
 
     private func transportButton(
         _ title: String, symbol: String, diameter: CGFloat, symbolSize: CGFloat,
-        disabled: Bool = false, action: @escaping () -> Void
+        focusID: String? = nil, disabled: Bool = false, action: @escaping () -> Void
     ) -> some View {
         Button {
             action()
@@ -295,6 +315,7 @@ struct PlayerPane: View {
                 .frame(width: diameter, height: diameter).contentShape(Circle())
         }
         .buttonStyle(.plain).modifier(PlayerGlass(shape: .circle))
+        .focused($focusedControl, equals: focusID ?? title)
         .disabled(disabled).help(title).accessibilityLabel(title)
     }
 

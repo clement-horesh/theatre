@@ -1,6 +1,13 @@
 import JellyfinKit
 import SwiftUI
 
+extension VideoItem {
+    var accessibleWatchStatus: String {
+        if isInProgress { return "In progress, \(remainingTimeLabel) remaining" }
+        return userData?.played == true ? "Watched" : (isUnwatched ? "Unwatched" : "")
+    }
+}
+
 struct WatchStatusTitle: View {
     let video: VideoItem
     var progressVideo: VideoItem? = nil
@@ -24,7 +31,6 @@ struct WatchProgressStrip: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "play.fill").font(.system(size: 13))
             GeometryReader { geometry in
                 Capsule().fill(.white.opacity(0.25))
                     .overlay(alignment: .leading) {
