@@ -37,7 +37,7 @@ struct JellyMacApp: App {
             }
         }
         Settings {
-            PlaybackSettingsView(preferences: model.preferences).preferredColorScheme(.dark)
+            PlaybackSettingsView(preferences: model.preferences, downloads: model.downloads).preferredColorScheme(.dark)
         }
         Window("Jellyfin Informations", id: "jellyfin-information") {
             JellyfinInformationView(model: model)
@@ -79,7 +79,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !terminationPending else { return .terminateLater }
         terminationPending = true
         Task {
-            await model.playerSession.shutdown()
+            async let playback: Void = model.playerSession.shutdown()
+            await model.downloads.shutdown()
+            await playback
             finishTermination(sender)
         }
         terminationTimeout = Task {

@@ -17,6 +17,7 @@ final class PlaybackSession: ObservableObject {
     let playback: PlaybackController
     let preferences: PlaybackPreferences
     var client: JellyfinClient?
+    weak var downloads: DownloadManager?
     var onStopped: ((JellyfinClient, String) -> Void)?
     private var playerWindow: PlayerWindowController?
     private var stream: PlaybackStream?
@@ -92,10 +93,19 @@ final class PlaybackSession: ObservableObject {
         loadEpisodeContext(video, client: client)
         playbackTask = Task { [self] in
             do {
-                let native = nativePlayback ? try await loadAppleStream(video: video, client: client) : nil
+                let native: (stream: PlaybackStream, item: AVPlayerItem)?
+                if nativePlayback, downloads?.playbackStream(for: video) != nil {
+                    // A following download may use a format AVPlayer can't open.
+                    // Let VLC continue playing it in the regular player window.
+                    native = try? await loadAppleStream(video: video, client: client)
+                } else {
+                    native = nativePlayback ? try await loadAppleStream(video: video, client: client) : nil
+                }
                 var result: PlaybackStream
                 if let native {
                     result = native.stream
+                } else if !compatibleOnly, let local = downloads?.playbackStream(for: video) {
+                    result = local
                 } else {
                     result = try await client.playback(for: video, compatibleOnly: compatibleOnly)
                 }
@@ -170,7 +180,10 @@ final class PlaybackSession: ObservableObject {
                 if !Task.isCancelled, systemPlaybackGeneration == generation,
                     reportErrors || playback.applePlayback.player.isExternalPlaybackActive
                 {
-                    presentationError = AppModel.friendly(error)
+                    presentationError =
+                        stream?.url.isFileURL == true
+                        ? "Apple’s player can’t present this downloaded format. You can keep watching it in Theatre."
+                        : AppModel.friendly(error)
                 }
                 return false
             }
@@ -184,6 +197,10 @@ final class PlaybackSession: ObservableObject {
     private func loadAppleStream(video: VideoItem, client: JellyfinClient, preserveSelection: Bool = false) async throws
         -> (stream: PlaybackStream, item: AVPlayerItem)
     {
+        if let local = downloads?.playbackStream(for: video) {
+            let item = try await playback.applePlayback.prepare(url: local.url)
+            return (local, item)
+        }
         let source = preserveSelection ? stream?.mediaSourceID : nil
         var audio = preserveSelection ? playback.selectedStreamIndex(type: "Audio") : nil
         var subtitle = preserveSelection ? playback.selectedStreamIndex(type: "Subtitle") : nil
@@ -302,13 +319,26 @@ final class PlaybackSession: ObservableObject {
             seconds: seconds, duration: playback.duration, rate: paused ? 0 : playback.rate,
             hasNext: nextEpisode != nil)
         guard let client, let stream else { return }
-        _ = playbackReporter.progress(client: client, stream: stream, seconds: seconds, paused: paused)
+        if stream.url.isFileURL {
+            downloads?.saveProgress(
+                itemID: stream.itemID, seconds: seconds, duration: playback.duration, paused: paused)
+        } else {
+            _ = playbackReporter.progress(client: client, stream: stream, seconds: seconds, paused: paused)
+        }
     }
 
     private func finishPlayback() {
         guard let client, let stream else { return }
         let seconds = playback.seconds
         self.stream = nil
+        if stream.url.isFileURL {
+            downloads?.saveProgress(
+                itemID: stream.itemID, seconds: seconds, duration: playback.duration,
+                paused: true, finished: playback.hasEnded, force: true)
+            downloads?.synchronize()
+            onStopped?(client, stream.itemID)
+            return
+        }
         let report = playbackReporter.stop(client: client, stream: stream, seconds: seconds)
         Task {
             _ = try? await report.value
@@ -365,6 +395,15 @@ final class PlaybackSession: ObservableObject {
 
     private func loadEpisodeContext(_ video: VideoItem, client: JellyfinClient) {
         guard video.type == "Episode" else { return }
+        if let record = downloads?.record(for: video), downloads?.playbackStream(for: video) != nil {
+            if let id = record.nextEpisodeID, let next = downloads?.cachedVideo(id: id),
+                downloads?.playbackStream(for: next) != nil
+            {
+                nextEpisode = next
+            }
+            creditsStart = record.creditsStart
+            return
+        }
         episodeTask = Task { [weak self] in
             async let next = try? client.nextEpisode(after: video)
             async let credits = try? client.creditsStart(itemID: video.id)

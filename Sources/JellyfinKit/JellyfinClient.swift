@@ -48,7 +48,7 @@ public struct JellyfinClient: Sendable {
     public func videos(
         startIndex: Int = 0, limit: Int = 100, search: String = "",
         itemTypes: [String] = [], parentID: String? = nil,
-        newestFirst: Bool = false, resumableOnly: Bool = false
+        newestFirst: Bool = false, resumableOnly: Bool = false, filters: VideoFilters = VideoFilters()
     ) async throws -> VideoPage {
         guard let session else { throw JellyfinError.unauthorized }
         var query = [
@@ -70,17 +70,32 @@ public struct JellyfinClient: Sendable {
             .init(name: "enableImages", value: "true"),
             .init(name: "enableUserData", value: "true"),
             .init(name: "imageTypeLimit", value: "1"),
-            .init(name: "fields", value: "Overview,Genres"),
+            .init(name: "fields", value: "Overview,Genres,SortName"),
             .init(name: "enableTotalRecordCount", value: "true"),
             .init(name: "startIndex", value: String(startIndex)),
             .init(name: "limit", value: String(limit)),
         ]
-        if resumableOnly { query.append(.init(name: "filters", value: "IsResumable")) }
+        if let status = resumableOnly ? "IsResumable" : filters.watchStatus.queryValue {
+            query.append(.init(name: "filters", value: status))
+        }
+        if !filters.genre.isEmpty { query.append(.init(name: "genres", value: filters.genre)) }
+        if let year = filters.year { query.append(.init(name: "years", value: String(year))) }
         if !search.isEmpty { query.append(.init(name: "searchTerm", value: search)) }
         if !itemTypes.isEmpty { query.append(.init(name: "includeItemTypes", value: itemTypes.joined(separator: ","))) }
         if !itemTypes.contains("Series") { query.append(.init(name: "mediaTypes", value: "Video")) }
         if let parentID { query.append(.init(name: "parentId", value: parentID)) }
         return try decode(await request("Items", query: query))
+    }
+
+    public func videoFilterOptions(itemTypes: [String]) async throws -> VideoFilterOptions {
+        guard let session else { throw JellyfinError.unauthorized }
+        return try decode(
+            await request(
+                "Items/Filters",
+                query: [
+                    .init(name: "userId", value: session.userID),
+                    .init(name: "includeItemTypes", value: itemTypes.joined(separator: ",")),
+                ]))
     }
 
     public func item(id: String) async throws -> VideoItem {
@@ -404,6 +419,31 @@ public struct JellyfinClient: Sendable {
             playSessionID: stream.playSessionID, positionTicks: Int64(safeSeconds * 10_000_000),
             isPaused: paused, playMethod: stream.method)
         _ = try await request("Sessions/Playing\(event.suffix)", method: "POST", body: body)
+    }
+
+    /// The download endpoint enforces Jellyfin's per-user download permission.
+    public func downloadRequest(itemID: String) throws -> URLRequest {
+        guard session != nil else { throw JellyfinError.unauthorized }
+        var result = URLRequest(url: try endpoint("Items/\(itemID)/Download"), timeoutInterval: 60)
+        result.setValue(authorization, forHTTPHeaderField: "Authorization")
+        return result
+    }
+
+    public func subtitleDownloadRequest(itemID: String, sourceID: String, index: Int, format: String) throws
+        -> URLRequest
+    {
+        guard session != nil else { throw JellyfinError.unauthorized }
+        guard ["srt", "ass", "ssa", "vtt", "sup", "sub"].contains(format) else { throw JellyfinError.invalidResponse }
+        var result = URLRequest(url: try endpoint("Videos/\(itemID)/\(sourceID)/Subtitles/\(index)/Stream.\(format)"))
+        result.setValue(authorization, forHTTPHeaderField: "Authorization")
+        return result
+    }
+
+    public func saveOfflineProgress(itemID: String, data: VideoUserData) async throws {
+        guard let session else { throw JellyfinError.unauthorized }
+        _ = try await request(
+            "UserItems/\(itemID)/UserData", method: "POST",
+            query: [.init(name: "userId", value: session.userID)], body: data)
     }
 
     public func logout() async throws { _ = try await request("Sessions/Logout", method: "POST") }

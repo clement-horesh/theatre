@@ -7,12 +7,16 @@ final class PlaybackFixtureServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "JellyMac.local-demo")
     private let token = UUID().uuidString
     let mediaDirectory: URL
+    private let allowsDownloads: Bool
+    private let chunkDelay: TimeInterval
     private var listener: NWListener?
     private var connections: [UUID: NWConnection] = [:]  // Used only on queue.
     @MainActor private(set) var address: URL?
 
-    init(mediaDirectory: URL) {
+    init(mediaDirectory: URL, allowsDownloads: Bool = true, chunkDelay: TimeInterval = 0) {
         self.mediaDirectory = mediaDirectory
+        self.allowsDownloads = allowsDownloads
+        self.chunkDelay = chunkDelay
     }
 
     private func catalog() -> [DemoVideo] {
@@ -160,6 +164,20 @@ final class PlaybackFixtureServer: @unchecked Sendable {
             ])
         }
         let segments = request.path.split(separator: "/").map(String.init)
+        if segments.count == 3, segments[0] == "Items", segments[2] == "Download",
+            let video = catalog().first(where: { $0.id == segments[1] })
+        {
+            guard allowsDownloads else { return Response(status: 403) }
+            return fileResponse(
+                video.url, size: video.size, contentType: video.contentType, range: request.headers["range"])
+        }
+        if segments.count == 6, segments[0] == "Videos", segments[3] == "Subtitles",
+            let index = Int(segments[4]), let video = catalog().first(where: { $0.id == segments[1] }),
+            let subtitle = video.subtitles.first(where: { $0.index == index }),
+            let size = try? subtitle.url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+        {
+            return fileResponse(subtitle.url, size: size, contentType: "text/plain", range: request.headers["range"])
+        }
         if segments.count == 3, segments[0] == "Items", segments[2] == "PlaybackInfo", request.method == "POST",
             let video = catalog().first(where: { $0.id == segments[1] })
         {
@@ -221,7 +239,7 @@ final class PlaybackFixtureServer: @unchecked Sendable {
     }
 
     private func fileResponse(_ url: URL, size: Int, contentType: String, range: String?) -> Response {
-        var headers = ["Content-Type": contentType, "Accept-Ranges": "bytes"]
+        var headers = ["Content-Type": contentType, "Accept-Ranges": "bytes", "ETag": "\"fixture-\(size)\""]
         if let range {
             guard let bounds = Self.byteRange(range, length: size) else {
                 return Response(status: 416, headers: ["Content-Range": "bytes */\(size)"])
@@ -291,7 +309,9 @@ final class PlaybackFixtureServer: @unchecked Sendable {
                 if error != nil {
                     self.finish(connection, id: id, file: file)
                 } else {
-                    self.sendChunk(file, remaining: remaining - data.count, connection: connection, id: id)
+                    self.queue.asyncAfter(deadline: .now() + self.chunkDelay) {
+                        self.sendChunk(file, remaining: remaining - data.count, connection: connection, id: id)
+                    }
                 }
             })
     }
@@ -367,5 +387,21 @@ private struct DemoVideo {
         default: return "application/octet-stream"
         }
     }
-    var json: [String: Any] { ["Id": id, "Name": name, "Type": "Video"] }
+    var json: [String: Any] {
+        [
+            "Id": id, "Name": name, "Type": "Movie", "RunTimeTicks": 80_000_000,
+            "UserData": ["Played": false, "PlaybackPositionTicks": 0],
+            "MediaSources": [
+                [
+                    "Id": id, "Container": url.pathExtension, "Size": size,
+                    "MediaStreams": subtitles.map {
+                        [
+                            "Index": $0.index, "Type": "Subtitle", "IsExternal": true,
+                            "Codec": "srt", "DisplayTitle": $0.url.lastPathComponent,
+                        ]
+                    },
+                ]
+            ],
+        ]
+    }
 }

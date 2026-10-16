@@ -10,6 +10,7 @@ struct MovieDetailHero: View {
     var canPlay = true
     let onPlay: () -> Void
     let onMore: () -> Void
+    var downloads: DownloadManager? = nil
 
     private var category: String {
         [video.type, video.genres?.prefix(2).joined(separator: " · "), video.officialRating]
@@ -77,6 +78,7 @@ struct MovieDetailHero: View {
                                 action: onPlay
                             )
                             .accessibilityIdentifier("detailPlay")
+                            if let downloads { DownloadButton(downloads: downloads, video: video) }
                             if isPreparing { ProgressView().controlSize(.small) }
                         }
                         .padding(.top, 8)

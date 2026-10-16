@@ -54,5 +54,6 @@ struct WatchStatusAction: View {
         Button(video.userData?.played == true ? "Mark as Unwatched" : "Mark as Watched") {
             Task { await model.toggleWatched(video) }
         }
+        DownloadActions(downloads: model.downloads, video: video)
     }
 }

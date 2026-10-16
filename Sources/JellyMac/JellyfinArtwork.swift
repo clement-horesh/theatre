@@ -9,6 +9,7 @@ final class ArtworkCache {
     private let session: URLSession
     private var pending: [NSString: Task<Data?, Error>] = [:]
     private var generation = UUID()
+    private var localArtwork: [String: URL] = [:]
 
     init(session: URLSession? = nil) {
         let configuration = URLSessionConfiguration.ephemeral
@@ -17,7 +18,18 @@ final class ArtworkCache {
         images.totalCostLimit = 80 * 1024 * 1024
     }
 
+    static func localKey(_ request: URLRequest) -> String {
+        guard var parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }) else {
+            return ""
+        }
+        parts.query = nil
+        return parts.string ?? ""
+    }
+
+    func setLocalArtwork(_ files: [String: URL]) { localArtwork = files }
+
     func image(for request: URLRequest) async throws -> NSImage? {
+        if let local = localArtwork[Self.localKey(request)], let image = NSImage(contentsOf: local) { return image }
         let key =
             "\(request.url?.absoluteString ?? ""):\(request.value(forHTTPHeaderField: "Authorization") ?? "")"
             as NSString

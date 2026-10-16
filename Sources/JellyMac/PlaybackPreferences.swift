@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import SwiftUI
@@ -21,6 +22,7 @@ final class PlaybackPreferences: ObservableObject {
 
 struct PlaybackSettingsView: View {
     @ObservedObject var preferences: PlaybackPreferences
+    @ObservedObject var downloads: DownloadManager
     private let languages = Locale.LanguageCode.isoLanguageCodes.map(\.identifier).sorted {
         (Locale.current.localizedString(forLanguageCode: $0) ?? $0)
             .localizedStandardCompare(Locale.current.localizedString(forLanguageCode: $1) ?? $1) == .orderedAscending
@@ -31,6 +33,21 @@ struct PlaybackSettingsView: View {
             Section("Playback") {
                 Toggle("Automatically play the next episode", isOn: $preferences.automaticallyPlayNext)
                 Text("The next episode starts when the current one ends.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Downloads") {
+                LabeledContent(
+                    "Video storage",
+                    value: ByteCountFormatter.string(fromByteCount: downloads.usedBytes, countStyle: .file))
+                if let free = downloads.availableBytes {
+                    LabeledContent(
+                        "Available", value: ByteCountFormatter.string(fromByteCount: free, countStyle: .file))
+                }
+                Button("Show Download Folder in Finder") { NSWorkspace.shared.open(downloads.storageURL) }
+                    .disabled(!FileManager.default.fileExists(atPath: downloads.storageURL.path))
+                Text(
+                    "Original quality. Downloads pause when Theatre quits; resume them from their menu after reopening."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
             Section("Languages") {
                 Picker("Preferred audio", selection: $preferences.audioLanguage) { languageOptions }
@@ -44,7 +61,7 @@ struct PlaybackSettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped).frame(width: 460, height: 300)
+        .formStyle(.grouped).frame(width: 480, height: 480)
     }
 
     private var languageOptions: some View {

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct VideoPerson: Decodable, Identifiable, Sendable, Equatable {
+public struct VideoPerson: Codable, Identifiable, Sendable, Equatable {
     public let itemID: String?
     public let name: String
     public let role: String?
@@ -17,17 +17,27 @@ public struct VideoPerson: Decodable, Identifiable, Sendable, Equatable {
     }
 }
 
-public struct VideoStudio: Decodable, Sendable, Equatable {
+public struct VideoStudio: Codable, Sendable, Equatable {
     public let name: String
     enum CodingKeys: String, CodingKey { case name = "Name" }
 }
 
-public struct VideoDetailSource: Decodable, Sendable, Equatable {
+public struct VideoDetailSource: Codable, Sendable, Equatable {
+    public let id: String?
+    public let container: String?
+    public let size: Int64?
     public let mediaStreams: [VideoDetailStream]?
-    enum CodingKeys: String, CodingKey { case mediaStreams = "MediaStreams" }
+    enum CodingKeys: String, CodingKey {
+        case id = "Id"
+        case container = "Container"
+        case size = "Size"
+        case mediaStreams = "MediaStreams"
+    }
 }
 
-public struct VideoDetailStream: Decodable, Sendable, Equatable {
+public struct VideoDetailStream: Codable, Sendable, Equatable {
+    public let index: Int?
+    public let isExternal: Bool?
     public let type: String?
     public let language: String?
     public let displayTitle: String?
@@ -45,6 +55,8 @@ public struct VideoDetailStream: Decodable, Sendable, Equatable {
     public let isHearingImpaired: Bool?
     public let isAttachedPic: Bool?
     enum CodingKeys: String, CodingKey {
+        case index = "Index"
+        case isExternal = "IsExternal"
         case type = "Type"
         case language = "Language"
         case displayTitle = "DisplayTitle"

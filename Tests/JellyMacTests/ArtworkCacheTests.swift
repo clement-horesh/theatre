@@ -8,6 +8,26 @@ final class ArtworkCacheTests: XCTestCase {
         base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=")!
 
     @MainActor
+    func testDownloadedArtworkLoadsWithoutContactingTheServer() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("Theatre-Artwork-\(UUID()).png")
+        try pixel.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let transport = TestURLProtocol.session { _ in
+            XCTFail("Offline artwork must not need a server request")
+            return .json("{}", status: 503)
+        }
+        defer { transport.invalidateAndCancel() }
+        let cache = ArtworkCache(session: transport)
+        let small = URLRequest(
+            url: URL(string: "https://theatre.test/Items/movie/Images/Primary?maxWidth=120&tag=one")!)
+        let large = URLRequest(
+            url: URL(string: "https://theatre.test/Items/movie/Images/Primary?maxWidth=420&tag=one")!)
+        cache.setLocalArtwork([ArtworkCache.localKey(small): file])
+        let image = try await cache.image(for: large)
+        XCTAssertNotNil(image)
+    }
+
+    @MainActor
     func testConcurrentArtworkIsDownloadedOnceAndCacheSeparatesAccounts() async throws {
         var requests = 0
         let transport = TestURLProtocol.session { [pixel] _ in

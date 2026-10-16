@@ -314,17 +314,17 @@ final class PlaybackController: ObservableObject {
         switch engine.state {
         case .playing, .paused:
             isPreparing = false
-            if !pendingSubtitles.isEmpty {
-                let tracks = pendingSubtitles
-                pendingSubtitles = []
-                for track in tracks { _ = engine.addPlaybackSlave(track.url, type: .subtitle, enforce: false) }
-            }
         case .error:
             isPreparing = false
             errorMessage = "VLC couldn't play this stream. Check the file or try Jellyfin's compatible stream."
         case .ended:
             playbackEnded()
         default: break
+        }
+        if !isPreparing, !hasEnded, errorMessage == nil, !pendingSubtitles.isEmpty {
+            let tracks = pendingSubtitles
+            pendingSubtitles = []
+            for track in tracks { _ = engine.addPlaybackSlave(track.url, type: .subtitle, enforce: false) }
         }
         if isPreparing && Date() > preparationDeadline {
             isPreparing = false

@@ -34,6 +34,14 @@ Shortcuts: **Space** play/pause, **← / →** seek ten seconds, **F** video ful
 
 **Theatre → Jellyfin Informations…** shows connection details. Jellyfin owns all artwork, metadata, media indexing, and watch history; no local media server is bundled with Theatre.
 
+## Offline downloads
+
+Use Download on a movie detail page, a title’s context menu, or an episode’s menu. Jellyfin must allow downloads for the signed-in account. Downloads keep the original video file, embedded tracks, external subtitles, and available artwork and metadata.
+
+The Downloads button on the right of the navbar opens Movies and Shows sections with the same Grid/Alphabetical views. Filter Content to All, Movies, or Shows. Completed downloads play locally, including when Jellyfin is unreachable. Picture in Picture and AirPlay for local files depend on AVPlayer’s format support. Watch progress is saved on the Mac and synced to the same account when the server is available, preserving a newer viewing session from another device.
+
+Pause, resume, retry, or remove downloads through their menus. Transfers pause on app quit and can resume after reopening when the server supports it. Theatre → Settings shows storage usage and the download folder in Finder. Files live under `~/Library/Application Support/Theatre/Downloads`, separately for each server and account, outside the project and excluded from backups. Signing out hides that account’s downloads and pauses its transfers; signing into the same account restores them.
+
 ## Code and checks
 
 `Sources/JellyfinKit` contains the reusable API/models. `AppModel` manages sign-in and library state; `PlaybackSession` owns playback tasks, server reporting, and the player window. `PlaybackController` coordinates VLC and AVPlayer. Small AppKit adapters supply native window and input behavior.

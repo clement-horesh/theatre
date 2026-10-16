@@ -86,6 +86,47 @@ final class LibraryLoadingTests: XCTestCase {
     }
 
     @MainActor
+    func testFilterChangesRejectAnOlderResponseBeforeTheNewRequestStarts() async throws {
+        let requested = expectation(description: "Unfiltered request started")
+        let transport = TestURLProtocol.session { _ in
+            requested.fulfill()
+            return .json(#"{"Items":[{"Id":"old","Name":"Old result"}],"TotalRecordCount":1}"#, delay: 0.05)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        let load = Task { await model.loadVideos() }
+        await fulfillment(of: [requested], timeout: 2)
+        model.libraryFilters.watchStatus = .unplayed
+        await load.value
+        XCTAssertTrue(model.videos.isEmpty)
+    }
+
+    @MainActor
+    func testLetterJumpLoadsOnlyThroughItsSectionAndHonorsTheActiveFilters() async throws {
+        let transport = TestURLProtocol.session { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertEqual(query.first { $0.name == "genres" }?.value, "Drama")
+            switch query.first(where: { $0.name == "startIndex" })?.value {
+            case "0":
+                return .json(#"{"Items":[{"Id":"a","Name":"The Arrival","SortName":"arrival"}],"TotalRecordCount":4}"#)
+            case "1": return .json(#"{"Items":[{"Id":"m","Name":"Moon"}],"TotalRecordCount":4}"#)
+            default:
+                XCTFail("Jump should stop once the requested letter is loaded")
+                return .json(#"{"Items":[],"TotalRecordCount":4}"#)
+            }
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        model.libraryFilters.genre = "Drama"
+        await model.loadVideos()
+        await model.loadThroughLetter("M")
+        XCTAssertEqual(model.videos.map(\.libraryLetter), ["A", "M"])
+        XCTAssertTrue(model.canLoadMore)
+        await model.loadThroughLetter("A")
+        XCTAssertEqual(model.videos.count, 2)
+    }
+
+    @MainActor
     func testEmptyPageDoesNotOfferEndlessLoadMoreRequests() async throws {
         let transport = TestURLProtocol.session { _ in .json(#"{"Items":[],"TotalRecordCount":10}"#) }
         defer { transport.invalidateAndCancel() }

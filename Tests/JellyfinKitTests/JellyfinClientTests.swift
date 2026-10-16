@@ -87,6 +87,53 @@ final class JellyfinClientTests: XCTestCase {
         }
     }
 
+    func testCatalogFiltersApplyOnTheServerAlongsideSearchAndPagination() async throws {
+        StubProtocol.handler = { request in
+            let query = Dictionary(
+                uniqueKeysWithValues: URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.map
+                { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["filters"], "IsUnplayed")
+            XCTAssertEqual(query["genres"], "Science Fiction & Fantasy")
+            XCTAssertEqual(query["years"], "2024")
+            XCTAssertEqual(query["searchTerm"], "star")
+            XCTAssertEqual(query["startIndex"], "100")
+            XCTAssertEqual(query["includeItemTypes"], "Movie")
+            XCTAssertTrue(query["fields"]?.contains("SortName") == true)
+            return (200, #"{"Items":[],"TotalRecordCount":0}"#)
+        }
+        var filters = VideoFilters()
+        filters.watchStatus = .unplayed
+        filters.genre = "Science Fiction & Fantasy"
+        filters.year = 2024
+        _ = try await client().videos(startIndex: 100, search: "star", itemTypes: ["Movie"], filters: filters)
+    }
+
+    func testAvailableFiltersAreScopedToTheSelectedLibraryType() async throws {
+        StubProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/jellyfin/Items/Filters")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertEqual(query.first { $0.name == "includeItemTypes" }?.value, "Series")
+            XCTAssertEqual(query.first { $0.name == "userId" }?.value, "user-1")
+            return (200, #"{"Genres":["Drama","Comedy"],"Years":[2024,2020]}"#)
+        }
+        let options = try await client().videoFilterOptions(itemTypes: ["Series"])
+        XCTAssertEqual(options.genres, ["Drama", "Comedy"])
+        XCTAssertEqual(options.years, [2024, 2020])
+    }
+
+    func testOriginalDownloadAndExternalSubtitlesKeepAuthenticationInHeaders() throws {
+        let api = try client()
+        let file = try api.downloadRequest(itemID: "movie")
+        XCTAssertEqual(file.url?.path, "/jellyfin/Items/movie/Download")
+        XCTAssertFalse(file.url!.absoluteString.contains("secret-token"))
+        XCTAssertTrue(file.value(forHTTPHeaderField: "Authorization")?.contains("secret-token") == true)
+        let subtitle = try api.subtitleDownloadRequest(itemID: "movie", sourceID: "source", index: 3, format: "ass")
+        XCTAssertEqual(subtitle.url?.path, "/jellyfin/Videos/movie/source/Subtitles/3/Stream.ass")
+        XCTAssertNotNil(subtitle.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertThrowsError(
+            try api.subtitleDownloadRequest(itemID: "movie", sourceID: "source", index: 3, format: "../file"))
+    }
+
     func testRecentlyAddedRequestsNewestItemsAcrossTheLibrary() async throws {
         StubProtocol.handler = { request in
             let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!

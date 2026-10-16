@@ -10,7 +10,16 @@ struct MovieDetailView: View {
     @State private var showPlayback: ShowPlaybackSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var video: VideoItem { loadedVideo ?? initialVideo }
+    private var video: VideoItem {
+        if model.showsDownloads {
+            return model.downloads.cachedVideo(id: initialVideo.id) ?? loadedVideo ?? initialVideo
+        }
+        return loadedVideo ?? initialVideo
+    }
+    private var playbackSelection: ShowPlaybackSelection? {
+        model.showsDownloads
+            ? ShowPlaybackSelection(episodes: model.downloads.episodes(seriesID: video.id)) : showPlayback
+    }
     private let pageColor = Color(white: 0.09)
 
     var body: some View {
@@ -21,11 +30,13 @@ struct MovieDetailView: View {
                         MovieDetailHero(
                             video: video, client: model.client, isPreparing: model.isStartingPlayback,
                             pageColor: pageColor,
-                            playTitle: video.type == "Series" ? (showPlayback?.title ?? "Start") : nil,
-                            canPlay: video.type != "Series" || showPlayback != nil,
+                            playTitle: video.type == "Series" ? (playbackSelection?.title ?? "Start") : nil,
+                            canPlay: video.type == "Series"
+                                ? playbackSelection != nil
+                                : (!model.showsDownloads || model.downloads.playbackStream(for: video) != nil),
                             onPlay: {
                                 if video.type == "Series" {
-                                    if let showPlayback { model.play(showPlayback.episode) }
+                                    if let playbackSelection { model.play(playbackSelection.episode) }
                                 } else {
                                     model.play(video)
                                 }
@@ -34,7 +45,7 @@ struct MovieDetailView: View {
                                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
                                     scroll.scrollTo("movieAbout", anchor: .top)
                                 }
-                            }
+                            }, downloads: model.downloads
                         )
                         .contextMenu { WatchStatusAction(video: video, model: model) }
                         .frame(
@@ -64,6 +75,11 @@ struct MovieDetailView: View {
         .foregroundStyle(.white)
         .navigationTitle(video.name)
         .task(id: "\(initialVideo.id):\(model.playbackRevision)") {
+            if model.showsDownloads {
+                loadedVideo = model.downloads.cachedVideo(id: initialVideo.id)
+                showPlayback = ShowPlaybackSelection(episodes: model.downloads.episodes(seriesID: initialVideo.id))
+                return
+            }
             guard let client = model.client else { return }
             isLoading = true
             errorMessage = nil
@@ -74,7 +90,10 @@ struct MovieDetailView: View {
                 loadedVideo = result
             } catch {
                 if !Task.isCancelled {
-                    errorMessage = "Some title details could not be loaded. You can still select a video to play."
+                    loadedVideo = model.downloads.cachedVideo(id: initialVideo.id)
+                    if loadedVideo == nil {
+                        errorMessage = "Some title details could not be loaded. You can still select a video to play."
+                    }
                 }
             }
             if video.type == "Series", !Task.isCancelled {
@@ -84,7 +103,11 @@ struct MovieDetailView: View {
                     showPlayback = ShowPlaybackSelection(episodes: episodes)
                 } catch {
                     if !Task.isCancelled {
-                        errorMessage = "The next episode couldn’t be loaded. You can still select an episode below."
+                        showPlayback = ShowPlaybackSelection(
+                            episodes: model.downloads.episodes(seriesID: initialVideo.id))
+                        if showPlayback == nil {
+                            errorMessage = "The next episode couldn’t be loaded. You can still select an episode below."
+                        }
                     }
                 }
             }

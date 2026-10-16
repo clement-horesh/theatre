@@ -12,8 +12,8 @@ struct MovieLibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
-    private var isHome: Bool { model.librarySection == .home }
-    private var showsFeature: Bool { model.librarySection == .home && model.search.isEmpty }
+    private var isHome: Bool { model.librarySection == .home && !model.showsDownloads }
+    private var showsFeature: Bool { isHome && model.search.isEmpty }
     private var refreshesHome: Bool {
         showsFeature && path.isEmpty && scenePhase == .active && !model.isPlayerWindowKey
     }
@@ -35,11 +35,10 @@ struct MovieLibraryView: View {
                 if windowPhase.showsPageNavigation {
                     ZStack {
                         centerNavigation
-                        if !path.isEmpty {
-                            HStack {
-                                backButton
-                                Spacer()
-                            }
+                        HStack {
+                            if !path.isEmpty { backButton }
+                            Spacer()
+                            downloadsButton
                         }
                     }
                     .buttonStyle(.plain).font(.system(size: 13))
@@ -79,28 +78,62 @@ struct MovieLibraryView: View {
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.65), value: featuredColor)
             }
             .onChange(of: model.librarySection) { _ in path = [] }
+            .onChange(of: model.showsDownloads) { _ in path = [] }
             .onChange(of: model.search) { _ in path = [] }
             .onChange(of: model.homeRecommendationRevision) { _ in chooseFeature() }
             .onChange(of: model.playbackRevision) { _ in chooseFeature() }
-            .task(id: "\(model.client?.session?.userID ?? ""):\(model.librarySection.rawValue):\(model.search)") {
+            .task(
+                id: LibraryQuery(
+                    userID: model.client?.session?.userID, section: model.librarySection, search: model.search,
+                    filters: model.libraryFilters, downloads: model.showsDownloads)
+            ) {
                 do {
                     if !model.search.isEmpty { try await Task.sleep(nanoseconds: 350_000_000) }
                     try Task.checkCancellation()
                     await model.loadVideos()
                 } catch {}
             }
-            .task(id: "\(model.client?.session?.userID ?? ""):\(refreshesHome)") {
-                guard refreshesHome else { return }
+            .task(id: "\(model.client?.session?.userID ?? ""):\(scenePhase)") {
+                guard scenePhase == .active else { return }
                 while !Task.isCancelled {
+                    model.downloads.synchronize()
                     do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { return }
-                    guard !Task.isCancelled, refreshesHome else { return }
-                    await model.refreshRecentlyAddedTitles()
+                    guard !Task.isCancelled else { return }
+                    if refreshesHome { await model.refreshRecentlyAddedTitles() }
                 }
             }
         }
     }
 
     private func libraryContent(width: CGFloat) -> some View {
+        Group {
+            if isHome {
+                homeContent(width: width)
+            } else {
+                LibraryBrowseView(model: model, downloaded: model.showsDownloads)
+            }
+        }
+        .overlay {
+            if !model.showsDownloads && model.isLoading && model.videos.isEmpty && (!isHome || !model.search.isEmpty) {
+                ProgressView("Loading library…")
+            } else if !model.showsDownloads && !model.isLoading && model.videos.isEmpty && model.errorMessage == nil
+                && (!isHome || !model.search.isEmpty
+                    || (model.recentlyAddedVideos.isEmpty && model.resumeVideos.isEmpty))
+            {
+                VStack(spacing: 12) {
+                    Image(systemName: "film").font(.system(size: 34))
+                    Text(
+                        model.libraryFilters.isEmpty && model.search.isEmpty
+                            ? "No titles in this library" : "No matching titles"
+                    )
+                    .font(.headline)
+                }
+                .foregroundStyle(.secondary).allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func homeContent(width: CGFloat) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 if showsFeature, !featuredVideos.isEmpty {
@@ -113,123 +146,86 @@ struct MovieLibraryView: View {
                         },
                         onToggleWatched: { video in Task { await model.toggleWatched(video) } }
                     )
-                    .frame(height: featureHeight(width: width)).padding(.top, 6)
+                    .frame(height: featureHeight(width: width))
                 }
-                if isHome {
-                    if model.search.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Continue").font(.title2.weight(.semibold))
-                            if model.resumeVideos.isEmpty && !model.isLoading {
-                                Text("Your unfinished movies and episodes will appear here.").foregroundStyle(
-                                    .secondary)
-                            }
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(spacing: 18) {
-                                    ForEach(model.resumeVideos) { video in
-                                        Button {
-                                            model.play(video)
-                                        } label: {
-                                            ContinueMediaCard(video: video, client: model.client).frame(width: 340)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .contextMenu { WatchStatusAction(video: video, model: model) }
-                                        .disabled(model.isStartingPlayback)
-                                        .accessibilityLabel("Resume \(video.title)")
-                                        .accessibilityIdentifier("continue-\(video.id)")
-                                    }
-                                    if model.canLoadMoreResume {
-                                        Button("Load more") { Task { await model.loadMoreResumeVideos() } }
-                                            .disabled(model.isLoadingResume).padding(20)
-                                    }
-                                }
-                                .padding(.bottom, 6)
-                            }
-                            .accessibilityIdentifier("continueRow")
+                if model.search.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Continue").font(.title2.weight(.semibold))
+                        if model.resumeVideos.isEmpty && !model.isLoading {
+                            Text("Your unfinished movies and episodes will appear here.").foregroundStyle(
+                                .secondary)
                         }
-                        .padding(.top, 14)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Recently Added").font(.title2.weight(.semibold))
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                LazyHStack(alignment: .top, spacing: 24) {
-                                    ForEach(model.recentlyAddedVideos) { video in
-                                        NavigationLink(value: video) {
-                                            MoviePoster(
-                                                video: video, client: model.client,
-                                                progressVideo: model.progressVideo(for: video)
-                                            ).frame(width: 180)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .contextMenu { WatchStatusAction(video: video, model: model) }
-                                        .accessibilityLabel(
-                                            "Details for \(video.title)"
-                                                + (model.progressVideo(for: video).isInProgress
-                                                    ? ", In progress" : (video.isUnwatched ? ", Unwatched" : ""))
-                                        )
-                                        .accessibilityIdentifier("recent-\(video.id)")
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(spacing: 18) {
+                                ForEach(model.resumeVideos) { video in
+                                    Button {
+                                        model.play(video)
+                                    } label: {
+                                        ContinueMediaCard(video: video, client: model.client).frame(width: 340)
                                     }
+                                    .buttonStyle(.plain)
+                                    .contextMenu { WatchStatusAction(video: video, model: model) }
+                                    .disabled(model.isStartingPlayback)
+                                    .accessibilityLabel("Resume \(video.title)")
+                                    .accessibilityIdentifier("continue-\(video.id)")
                                 }
-                                .padding(.bottom, 12)
-                            }
-                            .accessibilityIdentifier("recentlyAddedRow")
-                        }
-                        .padding(.top, 14)
-                    } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 380), spacing: 18)], spacing: 18)
-                        {
-                            ForEach(model.videos) { video in
-                                NavigationLink(value: video) {
-                                    ContinueMediaCard(video: video, client: model.client, showsPlaybackInfo: false)
+                                if model.canLoadMoreResume {
+                                    Button("Load more") { Task { await model.loadMoreResumeVideos() } }
+                                        .disabled(model.isLoadingResume).padding(20)
                                 }
-                                .buttonStyle(.plain)
-                                .contextMenu { WatchStatusAction(video: video, model: model) }
                             }
+                            .padding(.bottom, 6)
                         }
+                        .accessibilityIdentifier("continueRow")
                     }
+                    .padding(.top, 14)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recently Added").font(.title2.weight(.semibold))
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 24) {
+                                ForEach(model.recentlyAddedVideos) { video in
+                                    NavigationLink(value: video) {
+                                        MoviePoster(
+                                            video: video, client: model.client,
+                                            progressVideo: model.progressVideo(for: video)
+                                        ).frame(width: 180)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu { WatchStatusAction(video: video, model: model) }
+                                    .accessibilityLabel(
+                                        "Details for \(video.title)"
+                                            + (model.progressVideo(for: video).isInProgress
+                                                ? ", In progress" : (video.isUnwatched ? ", Unwatched" : ""))
+                                    )
+                                    .accessibilityIdentifier("recent-\(video.id)")
+                                }
+                            }
+                            .padding(.bottom, 12)
+                        }
+                        .accessibilityIdentifier("recentlyAddedRow")
+                    }
+                    .padding(.top, 14)
                 } else {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 24, alignment: .top)],
-                        alignment: .leading, spacing: 26
-                    ) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 380), spacing: 18)], spacing: 18) {
                         ForEach(model.videos) { video in
                             NavigationLink(value: video) {
-                                MoviePoster(
-                                    video: video, client: model.client, progressVideo: model.progressVideo(for: video))
+                                ContinueMediaCard(video: video, client: model.client, showsPlaybackInfo: false)
                             }
                             .buttonStyle(.plain)
                             .contextMenu { WatchStatusAction(video: video, model: model) }
-                            .accessibilityLabel(
-                                "Details for \(video.title)"
-                                    + (model.progressVideo(for: video).isInProgress
-                                        ? ", In progress" : (video.isUnwatched ? ", Unwatched" : "")))
                         }
                     }
                 }
-                if model.canLoadMore && (!isHome || !model.search.isEmpty) {
+                if model.canLoadMore && !model.search.isEmpty {
                     Button("Load more") { Task { await model.loadVideos(reset: false) } }
                         .frame(maxWidth: .infinity).padding(.bottom, 24)
                 }
                 if let error = model.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             }
-            .padding(24)
-            .padding(.bottom, isHome ? 64 : 0)
-        }
-        .overlay {
-            if model.isLoading && model.videos.isEmpty && (!isHome || !model.search.isEmpty) {
-                ProgressView("Loading library…")
-            } else if !model.isLoading && model.videos.isEmpty && model.errorMessage == nil
-                && (!isHome || !model.search.isEmpty
-                    || (model.recentlyAddedVideos.isEmpty && model.resumeVideos.isEmpty))
-            {
-                VStack(spacing: 12) {
-                    Image(systemName: "film").font(.system(size: 34))
-                    Text(
-                        model.search.isEmpty
-                            ? "No \(model.librarySection == .home ? "videos" : model.librarySection.rawValue.lowercased()) in this library"
-                            : "No matching titles"
-                    ).font(.headline)
-                }
-                .foregroundStyle(.secondary)
-            }
+            .padding(.horizontal, 24)
+            .padding(.top, showsFeature ? 8 : 24)
+            .padding(.bottom, 24)
+            .padding(.bottom, 64)
         }
     }
 
@@ -240,11 +236,26 @@ struct MovieLibraryView: View {
                 centerNavigation.buttonStyle(.plain)
             }
             .withoutSharedBackground()
+            ToolbarItem(placement: .primaryAction) { downloadsButton }
+                .withoutSharedBackground()
             if !path.isEmpty {
                 ToolbarItem(placement: .navigation) { backButton }
                     .withoutSharedBackground()
             }
         }
+    }
+
+    private var downloadsButton: some View {
+        Button {
+            closeSearch()
+            model.libraryFilters = VideoFilters()
+            model.showsDownloads.toggle()
+        } label: {
+            Image(systemName: model.showsDownloads ? "arrow.down.circle.fill" : "arrow.down.circle")
+                .font(.system(size: 15)).frame(width: 32, height: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).help("Downloads").accessibilityLabel("Downloads")
+        .accessibilityAddTraits(model.showsDownloads ? .isSelected : [])
     }
 
     private var centerNavigation: some View {
@@ -289,7 +300,8 @@ struct MovieLibraryView: View {
             .help("Search").accessibilityLabel("Search").accessibilityIdentifier("revealSearch")
             .keyboardShortcut("f", modifiers: .command)
             ForEach(LibrarySection.allCases) { section in
-                LibraryTabButton(section: section, selected: model.librarySection == section) {
+                LibraryTabButton(section: section, selected: !model.showsDownloads && model.librarySection == section) {
+                    model.showsDownloads = false
                     model.librarySection = section
                     closeSearch()
                 }
@@ -397,4 +409,12 @@ struct MoviePoster: View {
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
     }
+}
+
+private struct LibraryQuery: Hashable {
+    let userID: String?
+    let section: LibrarySection
+    let search: String
+    let filters: VideoFilters
+    let downloads: Bool
 }

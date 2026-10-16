@@ -23,7 +23,13 @@ final class AppModel: ObservableObject {
     @Published var username = ""
     @Published var password = ""
     @Published var search = ""
-    @Published var librarySection: LibrarySection = .home
+    @Published var showsDownloads = false
+    @Published var librarySection: LibrarySection = .home {
+        didSet { if oldValue != librarySection { libraryFilters = VideoFilters() } }
+    }
+    @Published var libraryFilters = VideoFilters() {
+        didSet { if oldValue != libraryFilters { loadGeneration = UUID() } }
+    }
     @Published private(set) var sessionWarning: String?
     @Published private(set) var client: JellyfinClient?
     @Published private(set) var videos: [VideoItem] = []
@@ -40,6 +46,8 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     let playerSession: PlaybackSession
     let preferences: PlaybackPreferences
+    let downloads: DownloadManager
+    private var downloadObservation: AnyCancellable?
     private var playbackObservation: AnyCancellable?
     var playback: PlaybackController { playerSession.playback }
     var currentVideo: VideoItem? { playerSession.currentVideo }
@@ -67,8 +75,9 @@ final class AppModel: ObservableObject {
 
     init(
         sessionStore: (any SessionStore)? = nil, defaults: UserDefaults = .standard,
-        transport: URLSession? = nil
+        transport: URLSession? = nil, downloads: DownloadManager? = nil
     ) {
+        self.downloads = downloads ?? DownloadManager()
         preferences = PlaybackPreferences(defaults: defaults)
         playerSession = PlaybackSession(preferences: preferences)
         self.defaults = defaults
@@ -85,8 +94,23 @@ final class AppModel: ObservableObject {
             }
         } catch { errorMessage = "Your saved sign-in couldn't be restored. Please connect again." }
         playerSession.client = client
+        playerSession.downloads = self.downloads
+        self.downloads.configure(client: client)
+        downloadObservation = self.downloads.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         playerSession.onStopped = { [weak self] client, itemID in
-            Task { await self?.refreshPlayedItem(client: client, itemID: itemID) }
+            guard let self else { return }
+            if let record = self.downloads.records.first(where: { $0.video.id == itemID }),
+                record.progress?.pendingSync == true
+            {
+                if let index = self.videos.firstIndex(where: { $0.id == itemID }) {
+                    self.videos[index] = record.displayedVideo
+                }
+                self.playbackRevision += 1
+            }
+            Task {
+                await self.downloads.pendingSync?.value
+                await self.refreshPlayedItem(client: client, itemID: itemID)
+            }
         }
         playbackObservation = playerSession.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
@@ -103,6 +127,12 @@ final class AppModel: ObservableObject {
     var canLoadMoreResume: Bool { nextResumeOffset < resumeTotalCount }
 
     func progressVideo(for video: VideoItem) -> VideoItem {
+        if showsDownloads {
+            if video.type == "Series" {
+                return downloads.episodes(seriesID: video.id).first(where: \.isInProgress) ?? video
+            }
+            return downloads.cachedVideo(id: video.id) ?? video
+        }
         if video.type == "Series", let episode = resumeVideos.first(where: { $0.seriesID == video.id }) {
             return episode
         }
@@ -136,6 +166,7 @@ final class AppModel: ObservableObject {
                 guard connectionGeneration == generation else { return }
                 client = try unauthenticated.authenticated(with: session)
                 playerSession.client = client
+                downloads.configure(client: client)
                 do {
                     try sessionStore.save(
                         SavedSession(
@@ -160,9 +191,12 @@ final class AppModel: ObservableObject {
 
     func loadVideos(reset: Bool = true) async {
         guard let client, !Task.isCancelled else { return }
+        downloads.synchronize()
+        if showsDownloads { return }
         if !reset && isLoading { return }
         let section = librarySection
         let query = search
+        let filters = section == .home ? VideoFilters() : libraryFilters
         let generation = UUID()
         loadGeneration = generation
         isLoading = true
@@ -186,7 +220,7 @@ final class AppModel: ObservableObject {
                 }
             } else {
                 let page = try await client.videos(
-                    startIndex: nextVideoOffset, search: query, itemTypes: section.itemTypes)
+                    startIndex: nextVideoOffset, search: query, itemTypes: section.itemTypes, filters: filters)
                 try Task.checkCancellation()
                 guard isCurrentLoad(generation, section: section, query: query) else { return }
                 nextVideoOffset = page.items.isEmpty ? page.totalCount : nextVideoOffset + page.items.count
@@ -250,15 +284,36 @@ final class AppModel: ObservableObject {
     }
 
     func toggleWatched(_ video: VideoItem) async {
+        if showsDownloads {
+            downloads.setWatched(video.userData?.played != true, video: video)
+            playbackRevision += 1
+            return
+        }
         guard let client else { return }
         do {
             try await client.setWatched(video.userData?.played != true, itemID: video.id)
             await refreshPlayedItem(client: client, itemID: video.id)
+            if librarySection != .home, !libraryFilters.isEmpty { await loadVideos() }
         } catch { errorMessage = Self.friendly(error) }
     }
 
     private func isCurrentLoad(_ generation: UUID, section: LibrarySection, query: String) -> Bool {
         loadGeneration == generation && librarySection == section && search == query
+    }
+
+    /// Load only as far as a requested alphabet section, retaining normal server pagination.
+    func loadThroughLetter(_ letter: String) async {
+        let section = librarySection
+        let query = search
+        let filters = libraryFilters
+        while !Task.isCancelled, section == librarySection, query == search, filters == libraryFilters,
+            !isLoading, nextVideoOffset < totalCount,
+            !videos.contains(where: { $0.libraryLetter == letter }),
+            videos.last.map({ $0.libraryLetter == "#" || $0.libraryLetter < letter }) == true
+        {
+            await loadVideos(reset: false)
+            if errorMessage != nil { return }
+        }
     }
 
     func loadMoreResumeVideos() async {
@@ -315,6 +370,8 @@ final class AppModel: ObservableObject {
         let previous = client
         client = nil
         playerSession.client = nil
+        downloads.configure(client: nil)
+        showsDownloads = false
         videos = []
         resumeVideos = []
         recentlyAddedVideos = []
@@ -331,6 +388,7 @@ final class AppModel: ObservableObject {
         isLoading = false
         sessionWarning = nil
         librarySection = .home
+        libraryFilters = VideoFilters()
         ArtworkCache.shared.clear()
         address = defaults.string(forKey: "serverAddress") ?? ""
         let pendingReport = playerSession.pendingReport

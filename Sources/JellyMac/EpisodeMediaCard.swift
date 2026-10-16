@@ -8,6 +8,10 @@ struct EpisodeMediaCard: View {
     let isPreparing: Bool
     let onPlay: (_ fromBeginning: Bool) -> Void
 
+    private var canPlay: Bool {
+        !isPreparing && (!model.showsDownloads || model.downloads.playbackStream(for: episode) != nil)
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Button {
@@ -62,11 +66,11 @@ struct EpisodeMediaCard: View {
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 14))
             }
-            .buttonStyle(.plain).disabled(isPreparing)
+            .buttonStyle(.plain).disabled(!canPlay)
             .accessibilityLabel((episode.isInProgress ? "Resume " : "Play ") + episode.title)
             Menu {
-                Button(episode.isInProgress ? "Resume" : "Play") { onPlay(false) }
-                if episode.isInProgress { Button("Play from Beginning") { onPlay(true) } }
+                Button(episode.isInProgress ? "Resume" : "Play") { onPlay(false) }.disabled(!canPlay)
+                if episode.isInProgress { Button("Play from Beginning") { onPlay(true) }.disabled(!canPlay) }
                 Divider()
                 WatchStatusAction(video: episode, model: model)
             } label: {

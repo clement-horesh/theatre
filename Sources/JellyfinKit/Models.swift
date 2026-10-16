@@ -6,9 +6,10 @@ public struct JellyfinSession: Codable, Sendable {
     public let accessToken: String
 }
 
-public struct VideoItem: Decodable, Identifiable, Sendable, Hashable {
+public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
     public let id: String
     public let name: String
+    public let sortName: String?
     public let type: String?
     public let seriesName: String?
     public let seriesID: String?
@@ -32,11 +33,43 @@ public struct VideoItem: Decodable, Identifiable, Sendable, Hashable {
     public let parentBackdropImageTags: [String]?
     public let parentLogoItemID: String?
     public let parentLogoImageTag: String?
-    public let userData: VideoUserData?
+    public var userData: VideoUserData?
+
+    /// A title placeholder for an offline group whose full metadata is not available yet.
+    public init(id: String, name: String, type: String) {
+        self.id = id
+        self.name = name
+        self.type = type
+        sortName = nil
+        seriesName = nil
+        seriesID = nil
+        indexNumber = nil
+        parentIndexNumber = nil
+        childCount = nil
+        productionYear = nil
+        runTimeTicks = nil
+        overview = nil
+        officialRating = nil
+        genres = nil
+        people = nil
+        productionLocations = nil
+        premiereDate = nil
+        studios = nil
+        mediaStreams = nil
+        mediaSources = nil
+        imageTags = nil
+        backdropImageTags = nil
+        parentBackdropItemID = nil
+        parentBackdropImageTags = nil
+        parentLogoItemID = nil
+        parentLogoImageTag = nil
+        userData = nil
+    }
 
     enum CodingKeys: String, CodingKey {
         case id = "Id"
         case name = "Name"
+        case sortName = "SortName"
         case type = "Type"
         case seriesName = "SeriesName"
         case seriesID = "SeriesId"
@@ -116,12 +149,19 @@ public struct VideoItem: Decodable, Identifiable, Sendable, Hashable {
     }
 }
 
-public struct VideoUserData: Decodable, Sendable, Equatable {
+public struct VideoUserData: Codable, Sendable, Equatable {
     public let played: Bool?
     public let lastPlayedDate: String?
     public let playbackPositionTicks: Int64?
     public let playedPercentage: Double?
     public let unplayedItemCount: Int?
+    public init(played: Bool, seconds: Double, lastPlayedDate: String, unplayedItemCount: Int? = nil) {
+        self.played = played
+        self.lastPlayedDate = lastPlayedDate
+        playbackPositionTicks = Int64(max(0, min(seconds.isFinite ? seconds : 0, 1e10)) * 10_000_000)
+        playedPercentage = nil
+        self.unplayedItemCount = unplayedItemCount
+    }
     enum CodingKeys: String, CodingKey {
         case played = "Played"
         case playbackPositionTicks = "PlaybackPositionTicks"
@@ -156,6 +196,19 @@ public struct PlaybackStream: Sendable {
     public var mediaTracks: [PlaybackTrack] = []
     public var videoAspectRatio: Double? = nil
     public var resumePositionSeconds: Double = 0
+    public init(
+        url: URL, itemID: String, mediaSourceID: String, playSessionID: String, method: String,
+        videoAspectRatio: Double? = nil, resumePositionSeconds: Double = 0
+    ) {
+        self.url = url
+        self.itemID = itemID
+        self.mediaSourceID = mediaSourceID
+        self.playSessionID = playSessionID
+        self.method = method
+        self.videoAspectRatio = videoAspectRatio
+        self.resumePositionSeconds = resumePositionSeconds
+    }
+
 }
 
 public struct PlaybackTrack: Sendable {
@@ -170,6 +223,12 @@ public struct PlaybackSubtitle: Identifiable, Sendable {
     public let id: Int
     public let name: String
     public let url: URL
+    public init(id: Int, name: String, url: URL) {
+        self.id = id
+        self.name = name
+        self.url = url
+    }
+
 }
 
 public enum JellyfinError: LocalizedError {
