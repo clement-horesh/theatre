@@ -2,6 +2,14 @@
 
 A native macOS Jellyfin client with a dark SwiftUI interface, Liquid Glass controls, and embedded VideoLAN VLCKit for broad-format playback.
 
+## Public beta
+
+The first beta is packaged for **Apple Silicon Macs (M1 or later)**. Get the `.dmg` from [GitHub Releases](https://github.com/clement-horesh/mac/releases) when published. Drag Theatre into Applications and connect to your own Jellyfin server. No server or media is included.
+
+This beta is ad-hoc signed and **not notarized by Apple**. macOS may require approval through **System Settings → Privacy & Security → Open Anyway** after the first attempted launch. See [installation instructions](INSTALL.md), [release notes](RELEASE_NOTES.md), and [privacy information](PRIVACY.md).
+
+The deployment target is macOS 13; hands-on validation has been on macOS 27.2. Older macOS versions and Intel are not yet verified. HDR, surround, and AirPlay output still require hardware validation.
+
 ## Build
 
 Open `Package.swift` in Xcode, or build the signed app:
@@ -11,6 +19,8 @@ bash Scripts/build-app.sh
 ```
 
 The app is created at `dist/Theatre.app`. Packaging requires a valid Apple Development or Developer ID signing identity. If several are installed, set `THEATRE_SIGNING_IDENTITY` to the certificate fingerprint you want to use. Reuse the same identity for updates so Keychain continues recognizing the app.
+
+To build without an Apple certificate, use `bash Scripts/build-app.sh --public-beta`. This creates an ad-hoc signed app at `dist/beta/Theatre.app`, separate from the local Apple-signed build. Ad-hoc builds may require Keychain reauthorization after updates. See [release preparation](RELEASING.md) for packaging the disk image and matching source archive.
 
 The setup script downloads the official VLCKit 3.7.2 macOS framework and verifies its SHA-256. It is dynamically linked, embedded, and signed with the app. See [third-party notices](Vendor/THIRD-PARTY-NOTICES.md).
 
@@ -74,3 +84,7 @@ See [playback validation](PLAYBACK_VALIDATION.md) for automated coverage and the
 Publish this `mac` folder independently. `.build`, `dist`, and downloaded frameworks are ignored. Personal media and Jellyfin state stay outside it. Local workspace setup is described in [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md).
 
 `JellyfinKit` can be reused for future iPhone and Apple TV clients; their interfaces and player integration are not implemented here.
+
+## License
+
+Copyright © 2026 Theatre contributors. Theatre’s original code and artwork are licensed under the [GNU General Public License version 3](LICENSE) (GPL-3.0-only), without warranty. Third-party software retains its own licenses; see [third-party notices](Vendor/THIRD-PARTY-NOTICES.md).

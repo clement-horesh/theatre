@@ -4,3 +4,9 @@ dist/
 .DS_Store
 *.xcuserstate
 Vendor/VLCKit.xcframework/
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.mobileprovision
