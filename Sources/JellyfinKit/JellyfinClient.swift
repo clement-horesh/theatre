@@ -109,7 +109,8 @@ public struct JellyfinClient: Sendable {
                     .init(name: "userId", value: session.userID), .init(name: "ids", value: id),
                     .init(
                         name: "fields",
-                        value: "Overview,Genres,People,Studios,ProductionLocations,MediaStreams,MediaSources,ChildCount"
+                        value:
+                            "Overview,Genres,People,Studios,ProductionLocations,MediaStreams,MediaSources,ChildCount,RemoteTrailers"
                     ),
                     .init(name: "enableUserData", value: "true"), .init(name: "enableImages", value: "true"),
                     .init(name: "imageTypeLimit", value: "1"), .init(name: "limit", value: "1"),

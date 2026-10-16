@@ -22,6 +22,7 @@ Enter your Jellyfin server address and account credentials. Theatre saves the se
 
 - **Home:** rotating recommendations, Continue cards that launch playback directly, and Recently Added posters grouped by show.
 - **Shows / Movies:** poster libraries, search, and detail pages with Jellyfin artwork and metadata.
+- **Trailers:** a card above Cast & Crew shows the first remote trailer supplied by Jellyfin, with its thumbnail and title. Select it to open a separate trailer window. YouTube uses its official embedded player; Open in Browser is available if the provider blocks playback. No additional API key is needed.
 - **Show details:** native season selector, episode cards, and a Start/Continue action resolved from resumable and next-up episodes.
 - **Player:** separate window with a locked video aspect ratio, audio/subtitle selection, subtitle appearance controls, native Picture in Picture and AirPlay.
 - **Watch status:** right-click a title or use an episode's three-dot menu to mark it watched or unwatched.

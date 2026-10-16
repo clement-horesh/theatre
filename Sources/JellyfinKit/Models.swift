@@ -27,6 +27,7 @@ public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
     public let studios: [VideoStudio]?
     public let mediaStreams: [VideoDetailStream]?
     public let mediaSources: [VideoDetailSource]?
+    public let remoteTrailers: [RemoteTrailer]?
     public let imageTags: [String: String]?
     public let backdropImageTags: [String]?
     public let parentBackdropItemID: String?
@@ -57,6 +58,7 @@ public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
         studios = nil
         mediaStreams = nil
         mediaSources = nil
+        remoteTrailers = nil
         imageTags = nil
         backdropImageTags = nil
         parentBackdropItemID = nil
@@ -88,6 +90,7 @@ public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
         case studios = "Studios"
         case mediaStreams = "MediaStreams"
         case mediaSources = "MediaSources"
+        case remoteTrailers = "RemoteTrailers"
         case imageTags = "ImageTags"
         case backdropImageTags = "BackdropImageTags"
         case parentBackdropItemID = "ParentBackdropItemId"

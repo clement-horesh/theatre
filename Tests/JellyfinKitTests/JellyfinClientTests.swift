@@ -326,7 +326,8 @@ final class JellyfinClientTests: XCTestCase {
             XCTAssertEqual(query.first { $0.name == "ids" }?.value, "video-1")
             let fields = Set((query.first { $0.name == "fields" }?.value ?? "").split(separator: ",").map(String.init))
             XCTAssertTrue(
-                Set(["People", "Studios", "ProductionLocations", "MediaStreams", "MediaSources"]).isSubset(of: fields))
+                Set(["People", "Studios", "ProductionLocations", "MediaStreams", "MediaSources", "RemoteTrailers"])
+                    .isSubset(of: fields))
             XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.contains("secret-token") == true)
             return (
                 200,

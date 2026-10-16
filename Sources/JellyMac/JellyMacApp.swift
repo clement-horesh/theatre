@@ -44,6 +44,10 @@ struct JellyMacApp: App {
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentSize)
+        WindowGroup("Trailer", for: TrailerPresentation.self) { $trailer in
+            if let trailer { TrailerView(trailer: trailer).preferredColorScheme(.dark) }
+        }
+        .defaultSize(width: 960, height: 540)
     }
 }
 

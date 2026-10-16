@@ -9,6 +9,7 @@ struct MovieDetailView: View {
     @State private var errorMessage: String?
     @State private var showPlayback: ShowPlaybackSelection?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openWindow) private var openWindow
 
     private var video: VideoItem {
         if model.showsDownloads {
@@ -57,6 +58,10 @@ struct MovieDetailView: View {
                                     .font(.callout).foregroundStyle(.secondary)
                             }
                             if video.type == "Series" { ShowEpisodesView(model: model, series: video) }
+                            MovieTrailerSection(video: video, client: model.client) { trailer in
+                                if model.playback.isPlaying { model.togglePlayback() }
+                                openWindow(value: trailer)
+                            }
                             MovieCastSection(video: video, client: model.client, width: geometry.size.width - 80)
                             MovieAboutSection(video: video, width: geometry.size.width - 80)
                                 .id("movieAbout")
