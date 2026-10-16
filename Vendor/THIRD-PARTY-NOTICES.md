@@ -18,8 +18,9 @@ The reproducible download is handled by `Scripts/setup-vlckit.sh`. The macOS
 framework contains Apple Silicon and Intel slices. Each included component retains
 its upstream license; consult VideoLAN's source distribution and COPYING for details.
 
-The public beta includes `Theatre-VLCKit-3.7.2-sources.tar.gz` alongside the app
-download. It contains the exact VLCKit/libVLC source archives, upstream patches,
+`Theatre-VLCKit-3.7.2-sources.tar.gz` is available in the separate Third-party sources release:
+https://github.com/clement-horesh/theatre/releases/tag/third-party-vlckit-3.7.2
+It contains the exact VLCKit/libVLC source archives, upstream patches,
 build scripts, and the source tarballs for the macOS dependencies. See
 `SOURCE.md` next to this notice for revisions, checksums, and rebuilding instructions.
 Theatre's original source is distributed separately under GPL-3.0-only.

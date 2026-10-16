@@ -23,10 +23,11 @@ The script builds the app separately at `dist/beta/Theatre.app`, packages a disk
 
 Use the existing repository, `https://github.com/clement-horesh/theatre`. Review its history before changing visibility from private to public; the history will become public too.
 
-Push the release commit, create tag `v0.1.0-beta.1` at that commit, and create a GitHub **prerelease** titled **Theatre 0.1.0 — Public Beta 1**. Use `RELEASE_NOTES.md` as the description, and attach:
+Publish `Theatre-VLCKit-3.7.2-sources.tar.gz` once in a separate release titled **Third-party sources — VLCKit 3.7.2**, tagged `third-party-vlckit-3.7.2`. Mark it as a prerelease so it is not treated as the latest application release. Link to it from application release notes and keep it publicly accessible while distributing apps using this framework version. Verify its public download and hash before removing a duplicate from an application release.
+
+Push the application release commit, create tag `v0.1.0-beta.1` at that commit, and create a GitHub **prerelease** titled **Theatre 0.1.0 — Public Beta 1**. Use `RELEASE_NOTES.md` as the description, and attach only:
 
 - `Theatre-0.1.0.dmg`
-- `Theatre-VLCKit-3.7.2-sources.tar.gz`
 
 GitHub’s automatic source archives refer to the tag. Do not upload the entire `dist/beta` directory: the standalone app is a packaging intermediate.
 

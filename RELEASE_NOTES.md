@@ -22,4 +22,4 @@ The build targets macOS 13 or later; hands-on validation has been on macOS 27.2.
 
 ## License and source
 
-Theatre is licensed under **GPL-3.0-only**. VLCKit and its components retain their upstream licenses; notices are included in the app. GitHub provides Theatre’s source archives automatically. The release also includes `Theatre-VLCKit-3.7.2-sources.tar.gz` with third-party sources. Only the DMG is needed to install the app. See [third-party notices](Vendor/THIRD-PARTY-NOTICES.md).
+Theatre is licensed under **GPL-3.0-only**. VLCKit and its components retain their upstream licenses; notices are included in the app. GitHub provides Theatre’s source archives automatically. VLC and dependency sources are available in the separate [Third-party sources release](https://github.com/clement-horesh/theatre/releases/tag/third-party-vlckit-3.7.2). Only the DMG is needed to install the app. See [third-party notices](Vendor/THIRD-PARTY-NOTICES.md).

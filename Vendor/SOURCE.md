@@ -1,6 +1,6 @@
 # Sources for the bundled VLCKit framework
 
-Theatre uses the unmodified official VLCKit 3.7.2 binary package. The public beta release also supplies **`Theatre-VLCKit-3.7.2-sources.tar.gz`**, containing:
+Theatre uses the unmodified official VLCKit 3.7.2 binary package. The separate [Third-party sources release](https://github.com/clement-horesh/theatre/releases/tag/third-party-vlckit-3.7.2) supplies **`Theatre-VLCKit-3.7.2-sources.tar.gz`**, containing:
 
 - The complete VLCKit source archive, including its libVLC patches, Xcode project, build and packaging scripts, and license.
 - The corresponding base libVLC source archive, including its build scripts, licenses, and contrib rules.
