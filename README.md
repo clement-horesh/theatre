@@ -4,7 +4,7 @@ A native macOS Jellyfin client with a dark SwiftUI interface, Liquid Glass contr
 
 ## Public beta
 
-The first beta is packaged for **Apple Silicon Macs (M1 or later)**. Get the `.dmg` from [GitHub Releases](https://github.com/clement-horesh/theatre/releases) when published. Drag Theatre into Applications and connect to your own Jellyfin server. No server or media is included.
+The first beta is packaged for **Apple Silicon Macs (M1 or later)**. [Download Theatre-0.1.0.dmg](https://github.com/clement-horesh/theatre/releases/download/v0.1.0-beta.1/Theatre-0.1.0.dmg), drag Theatre into Applications, and connect to your own Jellyfin server. No server or media is included.
 
 This beta is ad-hoc signed and **not notarized by Apple**. macOS may require approval through **System Settings → Privacy & Security → Open Anyway** after the first attempted launch. See [installation instructions](INSTALL.md), [release notes](RELEASE_NOTES.md), and [privacy information](PRIVACY.md).
 
