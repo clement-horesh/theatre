@@ -23,12 +23,14 @@ final class AppModel: ObservableObject {
     @Published var username = ""
     @Published var password = ""
     @Published var search = ""
-    @Published var showsDownloads = false
+    @Published var showsDownloads = false {
+        didSet { if oldValue != showsDownloads { invalidateLibraryLoad() } }
+    }
     @Published var librarySection: LibrarySection = .home {
         didSet { if oldValue != librarySection { libraryFilters = VideoFilters() } }
     }
     @Published var libraryFilters = VideoFilters() {
-        didSet { if oldValue != libraryFilters { loadGeneration = UUID() } }
+        didSet { if oldValue != libraryFilters { invalidateLibraryLoad() } }
     }
     @Published private(set) var sessionWarning: String?
     @Published private(set) var client: JellyfinClient?
@@ -52,16 +54,15 @@ final class AppModel: ObservableObject {
     var playback: PlaybackController { playerSession.playback }
     var currentVideo: VideoItem? { playerSession.currentVideo }
     var isStartingPlayback: Bool { playerSession.isStartingPlayback }
-    var isPreparingSystemPlayback: Bool { playerSession.isPreparingSystemPlayback }
     var isVideoFullscreen: Bool { playerSession.isVideoFullscreen }
-    var playbackError: String? { playerSession.playbackError }
-    var isPlayerWindowKey: Bool {
-        get { playerSession.isPlayerWindowKey }
-        set { playerSession.isPlayerWindowKey = newValue }
-    }
-    var presentationError: String? {
-        get { playerSession.presentationError }
-        set { playerSession.presentationError = newValue }
+    var isPlayerWindowKey: Bool { playerSession.isPlayerWindowKey }
+
+    func prepareForTermination() async {
+        async let playback: Void = playerSession.shutdown()
+        await downloads.shutdown()
+        await playback
+        // Playback shutdown can save its final position after downloads have paused.
+        await downloads.flush()
     }
 
     private var connectionTask: Task<Void, Never>?
@@ -96,7 +97,10 @@ final class AppModel: ObservableObject {
         playerSession.client = client
         playerSession.downloads = self.downloads
         self.downloads.configure(client: client)
-        downloadObservation = self.downloads.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        // Byte progress belongs to transfer rows, not every library view.
+        downloadObservation = self.downloads.$catalogRevision.dropFirst().sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         playerSession.onStopped = { [weak self] client, itemID in
             guard let self else { return }
             if let record = self.downloads.records.first(where: { $0.video.id == itemID }),
@@ -120,11 +124,19 @@ final class AppModel: ObservableObject {
     }
 
     func toggleVideoFullscreen() { playerSession.toggleVideoFullscreen() }
-    func exitVideoFullscreen() { playerSession.exitVideoFullscreen() }
-    func playerFullscreenChanged(_ fullscreen: Bool) { playerSession.playerFullscreenChanged(fullscreen) }
     var displayedUsername: String { client?.session?.username ?? "" }
     var canLoadMore: Bool { nextVideoOffset < totalCount && !isLoading }
     var canLoadMoreResume: Bool { nextResumeOffset < resumeTotalCount }
+
+    func canPlay(_ video: VideoItem) -> Bool {
+        !isStartingPlayback && (!showsDownloads || downloads.playbackStream(for: video) != nil)
+    }
+
+    private func invalidateLibraryLoad() {
+        loadGeneration = UUID()
+        isLoading = false
+        isLoadingResume = false
+    }
 
     func progressVideo(for video: VideoItem) -> VideoItem {
         if showsDownloads {
@@ -191,6 +203,8 @@ final class AppModel: ObservableObject {
 
     func loadVideos(reset: Bool = true) async {
         guard let client, !Task.isCancelled else { return }
+        await downloads.waitUntilReady()
+        guard !Task.isCancelled, self.client?.session?.accessToken == client.session?.accessToken else { return }
         downloads.synchronize()
         if showsDownloads { return }
         if !reset && isLoading { return }

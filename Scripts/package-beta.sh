@@ -2,8 +2,13 @@
 set -euo pipefail
 TASK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$TASK_ROOT"
+if [ "$#" -ne 1 ]; then
+    printf 'Usage: bash Scripts/package-beta.sh v0.1.1\n' >&2
+    exit 1
+fi
+TASK_TAG="$1"
 if [ "$(uname -m)" != arm64 ]; then
-    printf 'The first public beta must be built on Apple Silicon.\n' >&2
+    printf 'Public releases must be built on Apple Silicon.\n' >&2
     exit 1
 fi
 if [ -n "$(git status --porcelain)" ]; then
@@ -26,12 +31,12 @@ ditto "$TASK_RELEASE/Theatre.app" "$TASK_STAGE/Theatre.app"
 cp INSTALL.md "$TASK_STAGE/Read Me.md"
 cp LICENSE "$TASK_STAGE/LICENSE.txt"
 ln -s /Applications "$TASK_STAGE/Applications"
-codesign --verify --deep --strict "$TASK_STAGE/Theatre.app"
+bash Scripts/verify-app.sh "$TASK_STAGE/Theatre.app"
 if [ "$(xcrun lipo -archs "$TASK_STAGE/Theatre.app/Contents/MacOS/Theatre")" != arm64 ]; then
-    printf 'The beta executable must contain only the arm64 architecture.\n' >&2
+    printf 'The release executable must contain only the arm64 architecture.\n' >&2
     exit 1
 fi
-hdiutil create -ov -volname "Theatre $TASK_VERSION Beta 1" -srcfolder "$TASK_STAGE" \
+hdiutil create -ov -volname "Theatre $TASK_VERSION" -srcfolder "$TASK_STAGE" \
     -format UDZO "$TASK_RELEASE/$TASK_NAME.dmg"
 cp RELEASE_NOTES.md "$TASK_RELEASE/RELEASE_NOTES.md"
 (
@@ -39,4 +44,5 @@ cp RELEASE_NOTES.md "$TASK_RELEASE/RELEASE_NOTES.md"
     shasum -a 256 "$TASK_NAME.dmg" "$(basename "$TASK_VLC_SOURCES")"
 )
 hdiutil verify "$TASK_RELEASE/$TASK_NAME.dmg"
-printf 'Beta installer, VLC sources, and release notes: %s\n' "$TASK_RELEASE"
+bash Scripts/prepare-update.sh "$TASK_RELEASE/Theatre.app" "$TASK_TAG"
+printf 'Installer, VLC sources, and release notes: %s\n' "$TASK_RELEASE"

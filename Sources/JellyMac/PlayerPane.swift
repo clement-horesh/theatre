@@ -11,6 +11,8 @@ struct PlayerPane: View {
     @State private var showsSubtitleAppearance = false
     @FocusState private var focusedControl: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let controlSpacing: CGFloat = 10
+    private let episodeActionSpacing: CGFloat = 9
     private var isActivelyPlaying: Bool {
         playback.isPlaying && !playback.hasEnded && playback.errorMessage == nil && model.playbackError == nil
     }
@@ -35,23 +37,6 @@ struct PlayerPane: View {
                 .allowsHitTesting(controlsVisible)
                 .accessibilityHidden(!controlsVisible)
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: controlsVisible)
-            if model.offersNextEpisode || model.offersSkipIntro {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        if model.offersSkipIntro {
-                            GlassPlayButton(title: "Skip Intro") { model.skipIntro() }
-                                .accessibilityHint("Skip to the end of the introduction")
-                        } else {
-                            GlassPlayButton(resume: false, disabled: model.isStartingPlayback, title: "Next Episode") {
-                                model.playNextEpisode()
-                            }
-                        }
-                    }
-                }
-                .padding(.trailing, 24).padding(.bottom, 90)
-            }
             if model.isStartingPlayback || playback.isPreparing {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -66,6 +51,16 @@ struct PlayerPane: View {
                     Button("Try compatible stream") { model.retryCompatible() }
                 }
                 .padding(20).frame(maxWidth: 380).modifier(PlayerGlass(shape: .rounded(20)))
+            }
+        }
+        .overlayPreferenceValue(PlayerEpisodeActionBounds.self) { anchor in
+            GeometryReader { geometry in
+                if let anchor, model.offersNextEpisode || model.offersSkipIntro {
+                    let bounds = geometry[anchor]
+                    episodeAction.fixedSize()
+                        .frame(width: bounds.width, height: bounds.height)
+                        .position(x: bounds.midX, y: bounds.midY)
+                }
             }
         }
         .environment(\.colorScheme, .dark)
@@ -147,9 +142,16 @@ struct PlayerPane: View {
                     }
                     .shadow(color: .black.opacity(0.6), radius: 4, y: 1)
                     Spacer(minLength: 8)
-                    trackControls
+                    HStack(alignment: .bottom, spacing: episodeActionSpacing) {
+                        if model.offersNextEpisode || model.offersSkipIntro {
+                            // Reserve its place while the overlay stays visible when the controls fade.
+                            episodeAction.fixedSize().hidden()
+                                .anchorPreference(key: PlayerEpisodeActionBounds.self, value: .bounds) { $0 }
+                        }
+                        trackControls
+                    }
                 }
-                .padding(.bottom, 10)
+                .padding(.bottom, controlSpacing)
                 timeline
             }
             .padding(model.isVideoFullscreen ? 14 : 12)
@@ -171,6 +173,18 @@ struct PlayerPane: View {
                 ) { playback.seek(by: 10) }
             }
             .onHover { chrome.setInteraction(.transport, active: $0, isPlaying: playback.isPlaying) }
+        }
+    }
+
+    @ViewBuilder
+    private var episodeAction: some View {
+        if model.offersSkipIntro {
+            GlassPlayButton(title: "Skip Intro") { model.skipIntro() }
+                .accessibilityHint("Skip to the end of the introduction")
+        } else {
+            GlassPlayButton(resume: false, disabled: model.isStartingPlayback, title: "Next Episode") {
+                model.playNextEpisode()
+            }
         }
     }
 
@@ -327,6 +341,13 @@ struct PlayerPane: View {
         let total = Int(max(0, seconds))
         if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, total / 60 % 60, total % 60) }
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+private struct PlayerEpisodeActionBounds: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
     }
 }
 

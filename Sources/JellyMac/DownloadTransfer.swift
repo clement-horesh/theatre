@@ -1,28 +1,33 @@
 import Foundation
+import JellyfinKit
 
 /// URLSession owns the HTTP transfer, range requests and resumable data.
 final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     let id: UUID
     private let destination: URL
     private let onProgress: @MainActor (Int64, Int64) -> Void
-    private let onComplete: @MainActor (Result<URL, Error>) -> Void
+    private let onComplete: @MainActor (Result<Int64, Error>) -> Void
     private var session: URLSession!
     private var task: URLSessionDownloadTask!
-    private var result: Result<URL, Error>?
+    private var result: Result<Int64, Error>?
     private var lastProgress = Date.distantPast
 
     init(
         id: UUID = UUID(), request: URLRequest, resumeData: Data?, destination: URL,
         configuration: URLSessionConfiguration,
         onProgress: @escaping @MainActor (Int64, Int64) -> Void,
-        onComplete: @escaping @MainActor (Result<URL, Error>) -> Void
+        onComplete: @escaping @MainActor (Result<Int64, Error>) -> Void
     ) {
         self.id = id
         self.destination = destination
         self.onProgress = onProgress
         self.onComplete = onComplete
         super.init()
-        session = URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
+        let queue = OperationQueue()
+        queue.name = "Theatre.download-transfer"
+        queue.qualityOfService = .utility
+        queue.maxConcurrentOperationCount = 1
+        session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
         task = resumeData.map { session.downloadTask(withResumeData: $0) } ?? session.downloadTask(with: request)
     }
 
@@ -55,20 +60,21 @@ final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unchecked S
             case 403: throw JellyfinDownloadError.permission
             default: throw JellyfinDownloadError.http(response.statusCode)
             }
-            guard !["application/json", "text/html"].contains(response.mimeType ?? ""),
-                (try location.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0
+            let size = try location.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard !["application/json", "text/html"].contains(response.mimeType ?? ""), size > 0
             else { throw JellyfinDownloadError.invalidFile }
             try? FileManager.default.removeItem(at: destination)
             // The URLSession temporary file only exists for this delegate callback.
             try FileManager.default.moveItem(at: location, to: destination)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-            result = .success(destination)
+            result = .success(Int64(size))
         } catch { result = .failure(error) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let outcome =
-            error.map { Result<URL, Error>.failure($0) } ?? result ?? .failure(JellyfinDownloadError.invalidFile)
+            error.map { Result<Int64, Error>.failure($0) } ?? result
+            ?? .failure(JellyfinDownloadError.invalidFile)
         session.finishTasksAndInvalidate()
         Task { @MainActor in onComplete(outcome) }
     }
@@ -78,11 +84,8 @@ final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unchecked S
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        let origin = task.originalRequest?.url
-        let target = request.url
-        let sameServer =
-            origin?.scheme == target?.scheme && origin?.host == target?.host && origin?.port == target?.port
-        completionHandler(sameServer ? request : nil)
+        completionHandler(
+            JellyfinRedirectPolicy.allowsRedirect(from: task.originalRequest?.url, to: request.url) ? request : nil)
     }
 }
 

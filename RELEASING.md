@@ -1,34 +1,43 @@
-# Public beta release
+# Release Theatre
 
-The first release is **v0.1.0-beta.1**, for Apple Silicon. It uses ad-hoc signing and is not notarized. No Apple account or signing certificate is needed to build this package. Keep development builds Apple-signed if you want their stable Keychain identity.
+The next release is **v0.1.1**, build **100**, for Apple Silicon. It adds the updater. Existing 0.1.0 users must install this release manually once. Later versions can update inside Theatre.
 
-## Prepare
+## Signing keys
 
-1. Review the changes, license, installation instructions, release notes, and third-party source/license material.
-2. Run `bash Scripts/test.sh`. The default suite does not open windows or access Keychain. Physical playback checks remain documented in `PLAYBACK_VALIDATION.md`.
-3. Commit the release sources. Packaging refuses an uncommitted working tree so the published tag matches the built revision.
-4. Prepare `dist/beta/Theatre-VLCKit-3.7.2-sources.tar.gz` as described in `Vendor/SOURCE.md`, preserving the upstream archives and notices.
-5. Run `bash Scripts/package-beta.sh` on an Apple Silicon Mac with the required Xcode SDK.
+Sparkle 2.10.0 is pinned in `Package.swift` and `Package.resolved`. The app embeds its public Ed25519 verification key in `Resources/Info.plist`. The corresponding private key is stored only in the release builder's login Keychain under the Sparkle account **theatre-updates**. Users do not need that key or Keychain access to verify updates.
 
-The script builds the app separately at `dist/beta/Theatre.app`, packages a disk image with an Applications shortcut and installation instructions, and prints SHA-256 digests for the installer and third-party source package. It does not open Theatre, change the local Apple-signed application, push Git changes, or publish anything.
+The key was created once with `.build/artifacts/sparkle/Sparkle/bin/generate_keys --account theatre-updates`. Do not replace the embedded public key casually: existing apps trust the current key. Keep a secure backup of the signing key outside this repository using Sparkle's documented key-export procedure. Losing the key can prevent updating installed ad-hoc builds; their users would need another manual installation. Never commit private keys, exports, credentials, or Keychain contents.
+
+The public build is still ad-hoc signed and not notarized. Update signatures authenticate release archives; they do not make the publisher Apple-verified or bypass Gatekeeper. Use Developer ID signing and notarization when available. Keep local Apple-signed builds separate and use the same Apple identity for subsequent local builds to preserve Keychain recognition.
+
+## Prepare a release
+
+1. Increase `CFBundleShortVersionString` and the positive integer `CFBundleVersion` in `Resources/Info.plist` for every new published version. Build numbers must exceed all previously published builds. Builds use these tracked values directly, on every machine; they no longer increment a local bundle counter.
+2. Update `RELEASE_NOTES.md`, installation instructions, and any versioned download links for the intended release. Run `bash Scripts/test.sh`. Default tests do not open windows or read Keychain; they verify the existing feed with its public key.
+3. Commit the release sources. `package-beta.sh` refuses a dirty tree so the release tag can match the built source.
+4. Prepare `dist/beta/Theatre-VLCKit-3.7.2-sources.tar.gz` as described in `Vendor/SOURCE.md`, if it is not already available. Continue making those third-party sources publicly available while distributing VLCKit.
+5. Run `bash Scripts/package-beta.sh v0.1.1` on Apple Silicon. It builds and verifies the app, makes a DMG, and invokes `prepare-update.sh` to make a signed update ZIP and feed. Sparkle's `generate_appcast` may ask to access **theatre-updates** in Keychain for release signing. This is unrelated to GitHub sign-in. Package downloads have Keychain and netrc lookup disabled.
+
+For an already built app, run `bash Scripts/prepare-update.sh dist/beta/Theatre.app v0.1.1` directly. It verifies the app matches the source version and public key, preserves framework symlinks in the ZIP, embeds the release notes, signs the archive and feed, and verifies both using only the public key. Outputs are under `dist/updates/<tag>/`. It refuses to overwrite an existing output directory. Moving an output aside lets you regenerate it; do not change an archive after publishing its signature.
+
+The feed URL is `https://raw.githubusercontent.com/clement-horesh/theatre/main/updates/appcast.xml`. It avoids a separate service or GitHub Pages setup. The committed initial feed is signed and empty; it offers no update until a release is published. The feed contains Theatre application releases only; do not add the separate VLCKit sources release to it.
 
 ## Verify
 
-- Verify the disk image mounts and contains Theatre, Applications, Read Me, and the GPL license. Confirm `codesign --verify --deep --strict` succeeds for the mounted app.
-- Confirm the app signature is ad-hoc and the executable is arm64. A Gatekeeper assessment may reject this unnotarized app; do not describe it as Apple-approved.
-- Compare checksums, and check the source archive contains all build scripts, code, tests, icon assets, license, and notices, without `.git`, `.build`, local server data, credentials, personal media, or the binary framework.
-- Perform a download/install/launch check on a second Mac before claiming that installation or older macOS support is verified. Local packaging checks do not reproduce Gatekeeper quarantine after download.
+- Verify the DMG mounts and contains Theatre, Applications, installation instructions, and the GPL license.
+- Run `bash Scripts/verify-app.sh /path/to/Theatre.app`. It verifies signatures and that every bundled framework can be found using the executable's runtime search paths. The main binary must be arm64. Sparkle's nested helpers and framework must be embedded and signed. Its license is included in Resources.
+- Run `swift Scripts/verify-update.swift Resources/Info.plist dist/updates/<tag>/appcast.xml dist/updates/<tag>/Theatre-<version>-<build>.zip`. This checks the feed and ZIP against the public key without Keychain. A changed feed or ZIP must fail verification.
+- Test a genuine older updater-equipped copy against a newer signed build, including detection, the menu indicator, download, install, and relaunch. Check playback progress, paused downloads, preferences, and sign-in afterward. A downloaded/quarantined installation on a second Mac remains necessary for Gatekeeper and older-macOS validation.
+- Run `bash Scripts/test-updater.sh` for an automated native installer check. It compiles the real AppUpdater adapter into a disposable app, serves a signed update over loopback, and verifies detection, download, signature validation, the pre-install save hook, replacement, and relaunch. It uses a random temporary test key and does not open Keychain or modify Theatre. Run on a logged-in Mac with a GUI session; Sparkle's native helper needs macOS services even though the test has no interactive windows.
+- Check all archives and release notes exclude local media, server data, credentials, private keys, and unrelated build outputs. GitHub's source archives should refer to the release tag.
 
 ## Publish
 
-Use the existing repository, `https://github.com/clement-horesh/theatre`. Review its history before changing visibility from private to public; the history will become public too.
+No packaging script pushes Git changes or publishes a GitHub release.
 
-Publish `Theatre-VLCKit-3.7.2-sources.tar.gz` once in a separate release titled **Third-party sources — VLCKit 3.7.2**, tagged `third-party-vlckit-3.7.2`. Mark it as a prerelease so it is not treated as the latest application release. Link to it from application release notes and keep it publicly accessible while distributing apps using this framework version. Verify its public download and hash before removing a duplicate from an application release.
+1. Push the release commit and create its matching tag, such as `v0.1.1`.
+2. Create a normal GitHub release in `https://github.com/clement-horesh/theatre`, using `RELEASE_NOTES.md` for its description. Attach `dist/beta/Theatre-0.1.1.dmg` for manual installation and `dist/updates/v0.1.1/Theatre-0.1.1-100.zip` for Sparkle. Keep both assets immutable after publication. Keep the existing separate VLCKit sources release accessible.
+3. Verify both public downloads are available. Only then copy `dist/updates/v0.1.1/appcast.xml` to `updates/appcast.xml`, commit, and push to `main`. This announces the update. Do not edit the signed XML manually. Serving it before the ZIP is published would offer a broken download.
+4. Verify the public feed and its signature, then check for updates from an older installed version. Update README download links to the now-published version.
 
-Push the application release commit, create tag `v0.1.0-beta.1` at that commit, and create a GitHub **prerelease** titled **Theatre 0.1.0 — Public Beta 1**. Use `RELEASE_NOTES.md` as the description, and attach only:
-
-- `Theatre-0.1.0.dmg`
-
-GitHub’s automatic source archives refer to the tag. Do not upload the entire `dist/beta` directory: the standalone app is a packaging intermediate.
-
-For later releases, update the app version/build number, beta name in the packaging script, installation filename, and release notes together. Downloaded updates are installed manually. Developer ID signing and notarization can be added when an Apple Developer Program membership is available.
+Future releases repeat these steps with a higher version/build. Existing feed entries are retained when generating the next feed. Full update ZIPs are used initially; delta generation is disabled to keep release preparation simple.

@@ -65,7 +65,7 @@ struct ShowEpisodesView: View {
                         .frame(width: 300, height: 284)
                         .focusable()
                         .libraryCardFocus(episode.id, focus: $focusedEpisode, items: visibleEpisodes.map(\.id)) {
-                            if !model.isStartingPlayback { model.play(episode) }
+                            if model.canPlay(episode) { model.play(episode) }
                         }
                     }
                     if !model.showsDownloads && !usesSavedEpisodes && nextOffset < total {

@@ -1,5 +1,6 @@
 import Foundation
 import JellyfinKit
+import OSLog
 
 /// Preserve server event order even when a slow request overlaps pause, seek, or close.
 @MainActor
@@ -8,6 +9,7 @@ final class PlaybackReporter {
     private var lastPosition: Double?
     private var lastPaused = false
     private var queuedProgressReports = 0
+    private let logger = Logger(subsystem: "local.jellymac.app", category: "PlaybackReporting")
 
     func progress(
         client: JellyfinClient, stream: PlaybackStream, seconds: Double,
@@ -44,7 +46,14 @@ final class PlaybackReporter {
             defer { if countsAsProgress { self?.queuedProgressReports -= 1 } }
             // A failed report must not prevent subsequent reports or the final stop.
             _ = try? await previous?.value
-            try await client.reportPlayback(event, stream: stream, seconds: seconds, paused: paused)
+            do {
+                try await client.reportPlayback(event, stream: stream, seconds: seconds, paused: paused)
+            } catch {
+                let failure = error as NSError
+                self?.logger.error(
+                    "Playback report failed: domain=\(failure.domain, privacy: .public) code=\(failure.code)")
+                throw error
+            }
         }
         pendingTask = task
         return task

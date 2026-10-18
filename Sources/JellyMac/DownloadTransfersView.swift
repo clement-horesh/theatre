@@ -8,6 +8,14 @@ struct DownloadTransfersView: View {
     }
 
     var body: some View {
+        if downloads.isLoadingCatalog { ProgressView("Loading downloads…") }
+        if let error = downloads.errorMessage { Text(error).foregroundStyle(.red) }
+        if let warning = downloads.syncError {
+            HStack {
+                Text(warning).foregroundStyle(.secondary)
+                Button("Sync Now") { downloads.synchronize() }
+            }
+        }
         if !transfers.isEmpty {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Transfers").font(.title3.weight(.semibold))
@@ -19,11 +27,8 @@ struct DownloadTransfersView: View {
                                 Text(error).font(.caption).foregroundStyle(.secondary).fixedSize(
                                     horizontal: false, vertical: true)
                             } else {
-                                Text(
-                                    record.state == .preparing
-                                        ? "Preparing…" : (record.state == .paused ? "Paused" : "Downloading…")
-                                )
-                                .font(.caption).foregroundStyle(.secondary)
+                                Text(transferLabel(record.state))
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                             if record.expected > 0 {
                                 ProgressView(
@@ -55,6 +60,18 @@ struct DownloadTransfersView: View {
             }
         }
     }
+
+    private func transferLabel(_ state: DownloadRecord.State) -> String {
+        switch state {
+        case .queued: "Queued"
+        case .preparing: "Preparing…"
+        case .paused: "Paused"
+        case .pausing: "Pausing…"
+        case .failed: "Download failed"
+        default: "Downloading…"
+        }
+    }
+
 }
 
 struct LibraryConnectionIssue: View {

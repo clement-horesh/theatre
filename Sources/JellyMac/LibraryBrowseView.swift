@@ -100,15 +100,6 @@ struct LibraryBrowseView: View {
                             if !downloaded && model.isLoading && !model.videos.isEmpty {
                                 ProgressView().frame(maxWidth: .infinity)
                             }
-                            if downloaded {
-                                if let error = model.downloads.errorMessage { Text(error).foregroundStyle(.red) }
-                                if let warning = model.downloads.syncError {
-                                    HStack {
-                                        Text(warning).foregroundStyle(.secondary)
-                                        Button("Sync Now") { model.downloads.synchronize() }
-                                    }
-                                }
-                            }
                             if !downloaded, let error = model.errorMessage {
                                 LibraryConnectionIssue(model: model, message: error)
                             }
@@ -148,7 +139,8 @@ struct LibraryBrowseView: View {
         }
         .task(id: "\(model.librarySection.rawValue):\(downloaded)") {
             if downloaded {
-                model.downloads.checkLocalFiles()
+                await model.downloads.waitUntilReady()
+                await model.downloads.checkLocalFiles()
                 model.downloads.synchronize()
             } else {
                 await loadFilterOptions()

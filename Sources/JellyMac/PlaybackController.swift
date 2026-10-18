@@ -123,8 +123,9 @@ final class PlaybackController: ObservableObject {
                 + appearance.vlcOptions)
     }
 
-    func play(_ stream: PlaybackStream) {
+    func play(_ stream: PlaybackStream, playing: Bool = true) {
         stop()
+        pauseAfterPreparing = !playing
         currentStream = stream
         errorMessage = nil
         isPreparing = true

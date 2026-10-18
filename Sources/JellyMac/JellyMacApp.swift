@@ -5,10 +5,19 @@ import SwiftUI
 struct JellyMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
+    @StateObject private var updater = AppUpdater()
 
     var body: some Scene {
         WindowGroup("Theatre") {
-            ContentView(model: model).onAppear { delegate.model = model }.frame(minWidth: 900, minHeight: 580)
+            ContentView(model: model)
+                .onAppear {
+                    delegate.model = model
+                    updater.prepareForInstallation = { [weak appModel = model] in
+                        await appModel?.prepareForTermination()
+                    }
+                    updater.start()
+                }
+                .frame(minWidth: 900, minHeight: 580)
                 .preferredColorScheme(.dark)
                 .modifier(PageFullscreenNavigation())
         }
@@ -17,7 +26,7 @@ struct JellyMacApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .newItem) {}
-            JellyfinCommands(model: model)
+            TheatreCommands(model: model, updater: updater)
             CommandMenu("Playback") {
                 Button("Play/Pause") { model.togglePlayback() }
                     .keyboardShortcut(.space, modifiers: [])
@@ -37,9 +46,10 @@ struct JellyMacApp: App {
             }
         }
         Settings {
-            PlaybackSettingsView(preferences: model.preferences, downloads: model.downloads).preferredColorScheme(.dark)
+            PlaybackSettingsView(preferences: model.preferences, downloads: model.downloads, updater: updater)
+                .preferredColorScheme(.dark)
         }
-        Window("Jellyfin Informations", id: "jellyfin-information") {
+        Window("Information", id: "jellyfin-information") {
             JellyfinInformationView(model: model)
                 .preferredColorScheme(.dark)
         }
@@ -51,23 +61,29 @@ struct JellyMacApp: App {
     }
 }
 
-private struct JellyfinCommands: Commands {
+private struct TheatreCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject var model: AppModel
+    @ObservedObject var updater: AppUpdater
 
     var body: some Commands {
-        CommandGroup(after: .appSettings) {
-            Button("Jellyfin Informations…") {
-                openWindow(id: "jellyfin-information")
-            }
+        CommandGroup(after: .appInfo) {
             Divider()
             Button("Refresh Library") {
                 Task { await model.loadVideos() }
             }
             .keyboardShortcut("r", modifiers: .command)
             .disabled(model.client == nil || model.isLoading)
-            Button("Sign Out") { model.signOut() }
-                .disabled(model.client == nil)
+            Menu("Server") {
+                Button("Information…") {
+                    openWindow(id: "jellyfin-information")
+                }
+                Divider()
+                Button("Sign Out") { model.signOut() }
+                    .disabled(model.client == nil)
+            }
+            Divider()
+            UpdateMenu(updater: updater)
         }
     }
 }
@@ -83,9 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !terminationPending else { return .terminateLater }
         terminationPending = true
         Task {
-            async let playback: Void = model.playerSession.shutdown()
-            await model.downloads.shutdown()
-            await playback
+            await model.prepareForTermination()
             finishTermination(sender)
         }
         terminationTimeout = Task {

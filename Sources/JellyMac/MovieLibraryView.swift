@@ -110,7 +110,8 @@ struct MovieLibraryView: View {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     model.downloads.synchronize()
-                    model.downloads.checkLocalFiles()
+                    await model.downloads.waitUntilReady()
+                    await model.downloads.checkLocalFiles()
                     do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { return }
                     guard !Task.isCancelled else { return }
                     if refreshesHome { await model.refreshRecentlyAddedTitles() }

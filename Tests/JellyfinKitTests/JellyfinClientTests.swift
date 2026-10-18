@@ -65,7 +65,7 @@ final class JellyfinClientTests: XCTestCase {
     func testIntroMarkersHaveRealBoundsAndNeverSkipUnknownOrInvalidIntervals() async throws {
         StubProtocol.handler = { request in
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
-            XCTAssertEqual(query.first { $0.name == "includeSegmentTypes" }?.value, "Intro,Outro")
+            XCTAssertEqual(query.filter { $0.name == "includeSegmentTypes" }.compactMap(\.value), ["Intro", "Outro"])
             return (
                 200,
                 #"{"Items":[{"Type":"Intro","StartTicks":100000000,"EndTicks":600000000},{"Type":"Intro","StartTicks":700000000},{"Type":"Intro","StartTicks":800000000,"EndTicks":700000000},{"Type":"Intro","StartTicks":-1,"EndTicks":10000000}]}"#
@@ -593,9 +593,15 @@ final class JellyfinClientTests: XCTestCase {
     func testCreditMarkersAreServerProvidedAndOlderServersCanOmitThem() async throws {
         StubProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/jellyfin/MediaSegments/video-1")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            // This endpoint binds repeated enum values; a comma-delimited value can collapse to Intro.
+            let types = query.filter { $0.name == "includeSegmentTypes" }.compactMap(\.value)
+            XCTAssertEqual(types, ["Intro", "Outro"])
             return (
                 200,
-                #"{"Items":[{"Type":"Intro","StartTicks":10000000},{"Type":"Outro","StartTicks":600000000}],"TotalRecordCount":2}"#
+                types.contains("Outro")
+                    ? #"{"Items":[{"Type":"Intro","StartTicks":10000000},{"Type":"Outro","StartTicks":600000000}],"TotalRecordCount":2}"#
+                    : #"{"Items":[{"Type":"Intro","StartTicks":10000000}],"TotalRecordCount":1}"#
             )
         }
         let start = try await client().creditsStart(itemID: "video-1")

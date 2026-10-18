@@ -8,8 +8,16 @@
     <key>CFBundleIconName</key><string>theatre</string>
     <key>CFBundleIconFile</key><string>theatre</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>0.1.1</string>
+    <key>CFBundleVersion</key><string>100</string>
+    <key>SUFeedURL</key><string>https://raw.githubusercontent.com/clement-horesh/theatre/main/updates/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>ktJ0adrH+3DqRqe4zoYzNDwiPJn08rCWYai5iknyJAM=</string>
+    <key>SUEnableAutomaticChecks</key><true/>
+    <key>SUScheduledCheckInterval</key><integer>86400</integer>
+    <key>SUAllowsAutomaticUpdates</key><false/>
+    <key>SUEnableSystemProfiling</key><false/>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key><string>Connect to your Jellyfin server on your local network.</string>

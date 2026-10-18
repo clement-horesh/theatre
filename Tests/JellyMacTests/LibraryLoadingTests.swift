@@ -134,4 +134,24 @@ final class LibraryLoadingTests: XCTestCase {
         await model.loadVideos()
         XCTAssertFalse(model.canLoadMore)
     }
+
+    @MainActor
+    func testSwitchingToDownloadsDuringAnInvalidatedLoadClearsLoadingState() async throws {
+        let requested = expectation(description: "Catalog requested")
+        let transport = TestURLProtocol.session { _ in
+            requested.fulfill()
+            return .json(#"{"Items":[{"Id":"old","Name":"Old"}],"TotalRecordCount":1}"#, delay: 0.1)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        let load = Task { await model.loadVideos() }
+        await fulfillment(of: [requested], timeout: 2)
+        model.libraryFilters.genre = "Drama"
+        model.showsDownloads = true
+        await model.loadVideos()
+        await load.value
+        XCTAssertFalse(model.isLoading)
+        XCTAssertFalse(model.isLoadingResume)
+        XCTAssertTrue(model.videos.isEmpty)
+    }
 }

@@ -30,15 +30,19 @@ mkdir -p .build/module-cache dist
 bash Scripts/setup-vlckit.sh
 export CLANG_MODULE_CACHE_PATH="$TASK_ROOT/.build/module-cache"
 TASK_SDK_VERSION="$(xcrun --show-sdk-version)"
-swift build -c release --disable-sandbox -Xlinker -platform_version -Xlinker macos -Xlinker 13.0 -Xlinker "$TASK_SDK_VERSION"
-BIN_DIR="$(swift build -c release --show-bin-path)"
+swift build -c release --disable-keychain --disable-netrc --disable-sandbox \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
+    -Xlinker -platform_version -Xlinker macos -Xlinker 13.0 -Xlinker "$TASK_SDK_VERSION"
+BIN_DIR="$(swift build -c release --disable-keychain --disable-netrc --show-bin-path)"
 mkdir -p "$(dirname "$TASK_APP_DESTINATION")"
 TASK_STAGING_ROOT="$(mktemp -d "$TASK_ROOT/dist/.theatre-build.XXXXXX")"
 trap 'rm -rf "$TASK_STAGING_ROOT"' EXIT
 APP_PATH="$TASK_STAGING_ROOT/Theatre.app"
-TASK_PREVIOUS_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$TASK_APP_DESTINATION/Contents/Info.plist" 2>/dev/null || true)"
-case "$TASK_PREVIOUS_BUILD" in ""|*[!0-9]*) TASK_PREVIOUS_BUILD=0 ;; esac
-TASK_BUILD_VERSION=$((10#$TASK_PREVIOUS_BUILD + 1))
+TASK_BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist)"
+if ! [[ "$TASK_BUILD_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'CFBundleVersion must be a positive integer, increased in source for every release.\n' >&2
+    exit 1
+fi
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" "$APP_PATH/Contents/Frameworks"
 cp "$BIN_DIR/Theatre" "$APP_PATH/Contents/MacOS/Theatre"
 cp Resources/Info.plist "$APP_PATH/Contents/Info.plist"
@@ -73,9 +77,19 @@ cp Vendor/THIRD-PARTY-NOTICES.md "$APP_PATH/Contents/Resources/"
 cp Vendor/SOURCE.md "$APP_PATH/Contents/Resources/"
 cp LICENSE "$APP_PATH/Contents/Resources/"
 cp -R Vendor/VLCKit.xcframework/macos-arm64_x86_64/VLCKit.framework "$APP_PATH/Contents/Frameworks/"
+TASK_SPARKLE_ROOT="$TASK_ROOT/.build/artifacts/sparkle/Sparkle"
+cp "$TASK_SPARKLE_ROOT/LICENSE" "$APP_PATH/Contents/Resources/Sparkle-LICENSE.txt"
+cp -R "$TASK_SPARKLE_ROOT/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework" "$APP_PATH/Contents/Frameworks/"
+TASK_SPARKLE="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+# Sign Sparkle's nested helpers from the inside out, retaining their sandbox entitlements.
+for TASK_HELPER in "$TASK_SPARKLE"/Versions/B/XPCServices/*.xpc \
+    "$TASK_SPARKLE/Versions/B/Updater.app" "$TASK_SPARKLE/Versions/B/Autoupdate"; do
+    codesign --force --sign "$TASK_SIGNING_IDENTITY" --preserve-metadata=entitlements "$TASK_HELPER"
+done
+codesign --force --sign "$TASK_SIGNING_IDENTITY" "$TASK_SPARKLE"
 codesign --force --deep --sign "$TASK_SIGNING_IDENTITY" "$APP_PATH/Contents/Frameworks/VLCKit.framework"
 codesign --force --sign "$TASK_SIGNING_IDENTITY" "$APP_PATH"
-codesign --verify --deep --strict "$APP_PATH"
+bash Scripts/verify-app.sh "$APP_PATH"
 # Install only after compilation, packaging, signing, and verification succeed.
 if [ -d "$TASK_APP_DESTINATION" ]; then
     mv "$TASK_APP_DESTINATION" "$TASK_STAGING_ROOT/previous.app"

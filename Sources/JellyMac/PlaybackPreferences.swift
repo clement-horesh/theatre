@@ -23,6 +23,7 @@ final class PlaybackPreferences: ObservableObject {
 struct PlaybackSettingsView: View {
     @ObservedObject var preferences: PlaybackPreferences
     @ObservedObject var downloads: DownloadManager
+    @ObservedObject var updater: AppUpdater
     private let languages = Locale.LanguageCode.isoLanguageCodes.map(\.identifier).sorted {
         (Locale.current.localizedString(forLanguageCode: $0) ?? $0)
             .localizedStandardCompare(Locale.current.localizedString(forLanguageCode: $1) ?? $1) == .orderedAscending
@@ -30,6 +31,20 @@ struct PlaybackSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Updates") {
+                Toggle(
+                    "Automatically check for updates",
+                    isOn: Binding(
+                        get: { updater.automaticallyChecksForUpdates }, set: updater.setAutomaticallyChecksForUpdates)
+                )
+                .disabled(updater.configurationError != nil)
+                Button(updater.availableVersion == nil ? "Check for Updates…" : "Install Update…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+                Text(updater.configurationError ?? "Checks daily. Theatre only installs an update when you choose to.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Playback") {
                 Toggle("Automatically play the next episode", isOn: $preferences.automaticallyPlayNext)
                 Text("The next episode starts when the current one ends.").font(.caption).foregroundStyle(.secondary)

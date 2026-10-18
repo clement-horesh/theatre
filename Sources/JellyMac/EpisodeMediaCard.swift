@@ -9,7 +9,7 @@ struct EpisodeMediaCard: View {
     let onPlay: (_ fromBeginning: Bool) -> Void
 
     private var canPlay: Bool {
-        !isPreparing && (!model.showsDownloads || model.downloads.playbackStream(for: episode) != nil)
+        !isPreparing && model.canPlay(episode)
     }
 
     var body: some View {

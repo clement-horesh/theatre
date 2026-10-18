@@ -1,5 +1,20 @@
 # Third-party software
 
+## Sparkle
+
+Theatre embeds the official **Sparkle 2.10.0** framework for application updates.
+Sparkle uses a permissive MIT-style license and includes components under their
+own licenses. The complete upstream license and component notices are included as
+`Sparkle-LICENSE.txt` in the app's Resources directory.
+
+Project and source: https://github.com/sparkle-project/Sparkle/tree/2.10.0
+The dependency revision is pinned in `Package.resolved`; Swift Package Manager
+verifies the upstream binary artifact checksum declared by that package.
+Theatre does not modify Sparkle's source. Its embedded helpers are re-signed
+along with the app when packaging.
+
+## VLCKit
+
 Theatre embeds the unmodified official VideoLAN **VLCKit 3.7.2** macOS binary framework,
 including libVLC and its included components. It provides the media decoder and renderer.
 

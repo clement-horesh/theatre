@@ -1,8 +1,10 @@
 import Foundation
 import JellyfinKit
 
-struct DownloadRecord: Codable, Identifiable {
-    enum State: String, Codable { case preparing, downloading, pausing, paused, failed, complete, removed }
+struct DownloadRecord: Codable, Identifiable, Sendable {
+    enum State: String, Codable, Sendable {
+        case queued, preparing, downloading, pausing, paused, failed, complete, removed
+    }
     let id: UUID
     var video: VideoItem
     var series: VideoItem?
@@ -20,18 +22,18 @@ struct DownloadRecord: Codable, Identifiable {
     var intro: MediaSegment?
     var progress: Progress?
 
-    struct Subtitle: Codable {
+    struct Subtitle: Codable, Sendable {
         let index: Int
         let name: String
         let file: String
     }
-    struct Progress: Codable, Equatable {
+    struct Progress: Codable, Equatable, Sendable {
         var data: VideoUserData
         let updated: Date
         var paused = false
         var pendingSync = true
     }
-    var isActive: Bool { state == .preparing || state == .downloading }
+    var isActive: Bool { state == .queued || state == .preparing || state == .downloading }
     var remainingBytes: Int64 { max(0, expected) - min(max(0, received), max(0, expected)) }
     var displayedVideo: VideoItem {
         var snapshot = video

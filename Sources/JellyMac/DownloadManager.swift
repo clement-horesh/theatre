@@ -3,6 +3,7 @@ import Combine
 import CryptoKit
 import Foundation
 import JellyfinKit
+import OSLog
 
 /// A small account-scoped catalog; large media files are transferred by URLSession.
 @MainActor
@@ -10,6 +11,9 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var records: [DownloadRecord] = []
     @Published private(set) var errorMessage: String?
     @Published private(set) var syncError: String?
+    @Published private(set) var isLoadingCatalog = false
+    @Published private(set) var catalogRevision = 0
+    private(set) var titles: [VideoItem] = []
     private(set) var directory: URL?
     private var client: JellyfinClient?
     private let root: URL
@@ -21,9 +25,26 @@ final class DownloadManager: ObservableObject {
     private var generation = UUID()
     private var catalogReadable = true
     private let availableSpace: (() -> Int64?)?
+    @Published private var freeBytes: Int64?
+    private let files = DownloadFileIO()
+    private var catalogTask: Task<Void, Never>?
+    private var saveTask: Task<Void, Never>?
+    private var fileOperations: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
+    private var pendingSaves: [URL: [DownloadRecord]] = [:]
+    private var queued: [UUID] = []
+    private var activeDownloads = Set<UUID>()
+    private var isShuttingDown = false
+    private let maximumConcurrentDownloads: Int
+    private var recordsByVideo: [String: Int] = [:]
+    private var recordsBySeries: [String: [DownloadRecord]] = [:]
+    private let logger = Logger(subsystem: "local.jellymac.app", category: "Downloads")
 
-    init(root: URL? = nil, configuration: URLSessionConfiguration = .ephemeral, availableSpace: (() -> Int64?)? = nil) {
+    init(
+        root: URL? = nil, configuration: URLSessionConfiguration = .ephemeral,
+        availableSpace: (() -> Int64?)? = nil, maximumConcurrentDownloads: Int = 2
+    ) {
         self.availableSpace = availableSpace
+        self.maximumConcurrentDownloads = max(1, maximumConcurrentDownloads)
         self.root =
             root
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -38,6 +59,7 @@ final class DownloadManager: ObservableObject {
         for task in preparations.values { task.cancel() }
         for transfer in transfers.values { transfer.cancel() }
         syncTask?.cancel()
+        catalogTask?.cancel()
         assets.invalidateAndCancel()
     }
 
@@ -54,57 +76,101 @@ final class DownloadManager: ObservableObject {
             self.client = client
             return
         }
-        // Persist each old-account pause before detaching its catalog.
+        // Finish old-account writes and native pause data before loading another catalog.
+        let previousCatalog = catalogTask
+        previousCatalog?.cancel()
         for task in preparations.values { task.cancel() }
         preparations.removeAll()
         let oldDirectory = directory
-        for (id, transfer) in transfers {
-            let folder = oldDirectory?.appendingPathComponent(id.uuidString)
-            Task {
-                if let data = await transfer.pause(), let folder {
-                    try? data.write(to: folder.appendingPathComponent("resume.data"), options: .atomic)
-                }
-            }
-        }
+        let oldTransfers = transfers
+        let oldOperations = fileOperations.values.map(\.task)
+        fileOperations.removeAll()
         for index in records.indices where records[index].isActive || records[index].state == .pausing {
             records[index].state = .paused
         }
         save()
+        let previousSave = saveTask
         transfers.removeAll()
+        queued.removeAll()
+        activeDownloads.removeAll()
         syncTask?.cancel()
         syncTask = nil
         generation = UUID()
+        let current = generation
         self.client = client
         directory = next
         records = []
+        rebuildCatalog()
         catalogReadable = true
         errorMessage = nil
         syncError = nil
+        freeBytes = nil
+        isShuttingDown = false
         ArtworkCache.shared.setLocalArtwork([:])
-        guard let directory else { return }
-        let manifest = directory.appendingPathComponent("catalog.json")
-        guard FileManager.default.fileExists(atPath: manifest.path) else { return }
-        do {
-            records = try JSONDecoder().decode([DownloadRecord].self, from: Data(contentsOf: manifest))
-            for index in records.indices {
-                if records[index].isActive || records[index].state == .pausing { records[index].state = .paused }
+        isLoadingCatalog = next != nil
+        let files = files
+        catalogTask = Task { [weak self] in
+            await previousCatalog?.value
+            await previousSave?.value
+            for operation in oldOperations { await operation.value }
+            for (id, transfer) in oldTransfers {
+                if let data = await transfer.pause(), let oldDirectory {
+                    let url = oldDirectory.appendingPathComponent(id.uuidString).appendingPathComponent("resume.data")
+                    try? await files.perform { try data.write(to: url, options: .atomic) }
+                }
             }
-            checkLocalFiles()
-            registerArtwork()
-        } catch {
-            catalogReadable = false
-            errorMessage = "Saved downloads couldn’t be read. Your files have been kept."
+            guard let self, self.generation == current, !Task.isCancelled else { return }
+            defer {
+                if self.generation == current {
+                    self.isLoadingCatalog = false
+                    self.rebuildCatalog()
+                }
+            }
+            guard let next else { return }
+            do {
+                let loaded = try await files.perform {
+                    let manifest = next.appendingPathComponent("catalog.json")
+                    guard FileManager.default.fileExists(atPath: manifest.path) else { return [DownloadRecord]() }
+                    return try JSONDecoder().decode([DownloadRecord].self, from: Data(contentsOf: manifest))
+                }
+                guard self.generation == current, !Task.isCancelled else { return }
+                self.records = loaded.map { record in
+                    var record = record
+                    if record.isActive || record.state == .pausing { record.state = .paused }
+                    return record
+                }
+                self.rebuildCatalog()
+                await self.checkLocalFiles()
+                guard self.generation == current, !Task.isCancelled else { return }
+                self.registerArtwork()
+            } catch {
+                guard self.generation == current, !Task.isCancelled else { return }
+                self.catalogReadable = false
+                self.errorMessage = "Saved downloads couldn’t be read. Your files have been kept."
+            }
         }
     }
 
+    func waitUntilReady() async {
+        while let task = catalogTask {
+            let current = generation
+            await task.value
+            if generation == current { return }
+        }
+    }
+
+    func flush() async {
+        while let task = saveTask { await task.value }
+    }
+
     func record(for video: VideoItem) -> DownloadRecord? {
-        records.first { $0.video.id == video.id && $0.state != .removed }
+        recordsByVideo[video.id].map { records[$0] }
     }
     func cachedVideo(id: String) -> VideoItem? {
-        if let record = records.first(where: { $0.video.id == id && $0.state != .removed }) {
-            return record.displayedVideo
+        if let index = recordsByVideo[id] {
+            return records[index].displayedVideo
         }
-        let group = records.filter { $0.series?.id == id && $0.state != .removed }
+        let group = recordsBySeries[id] ?? []
         guard var show = (group.first(where: \.prepared) ?? group.first)?.series else {
             return nil
         }
@@ -117,42 +183,44 @@ final class DownloadManager: ObservableObject {
         return show
     }
     func episodes(seriesID: String, completedOnly: Bool = true) -> [VideoItem] {
-        records.filter {
-            $0.state != .removed && $0.video.seriesID == seriesID
-                && (!completedOnly || ($0.state == .complete && localFile($0) != nil))
+        (recordsBySeries[seriesID] ?? []).filter {
+            !completedOnly || $0.state == .complete
         }
         .map(\.displayedVideo).sorted {
             ($0.parentIndexNumber ?? 0, $0.indexNumber ?? 0, $0.name)
                 < ($1.parentIndexNumber ?? 0, $1.indexNumber ?? 0, $1.name)
         }
     }
-    var titles: [VideoItem] {
-        var titles = records.filter { $0.video.type == "Movie" && $0.state != .removed }.map(\.displayedVideo)
-        var seen = Set<String>()
-        for record in records where record.video.type == "Episode" && record.state != .removed {
-            let show = record.series ?? record.displayedVideo
-            let key = record.video.seriesID ?? show.id
-            if seen.insert(key).inserted { titles.append(cachedVideo(id: show.id) ?? show) }
-        }
-        return titles.sorted {
-            ($0.sortName ?? $0.name).localizedStandardCompare($1.sortName ?? $1.name) == .orderedAscending
-        }
-    }
     var pendingSync: Task<Void, Never>? { syncTask }
     var storageURL: URL { directory ?? root }
     var usedBytes: Int64 { records.reduce(0) { $0 + $1.received } }
-    var availableBytes: Int64? {
-        if let availableSpace { return availableSpace() }
-        let location =
-            directory.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            ?? root.deletingLastPathComponent()
-        return (try? FileManager.default.attributesOfFileSystem(forPath: location.path)[.systemFreeSize] as? NSNumber)?
-            .int64Value
-    }
+    var availableBytes: Int64? { availableSpace?() ?? freeBytes }
 
-    func checkLocalFiles() {
+    func checkLocalFiles() async {
+        let current = generation
+        let revision = catalogRevision
+        let candidates = records.filter { $0.state == .complete }.map { ($0.id, fileURL($0, name: $0.videoFile)) }
+        let location = directory ?? root
+        let result = try? await files.perform {
+            let missing = Set(
+                candidates.compactMap { id, url in
+                    url.map { FileManager.default.fileExists(atPath: $0.path) } == true ? nil : id
+                })
+            var existing = location
+            while !FileManager.default.fileExists(atPath: existing.path), existing.path != "/" {
+                existing.deleteLastPathComponent()
+            }
+            let free =
+                (try? FileManager.default.attributesOfFileSystem(forPath: existing.path)[.systemFreeSize] as? NSNumber)?
+                .int64Value
+            return (missing, free)
+        }
+        guard generation == current, !Task.isCancelled, let (missing, free) = result else { return }
+        freeBytes = free
+        // A removal or replacement during the disk check invalidates its missing-file snapshot.
+        guard catalogRevision == revision else { return }
         var changed = false
-        for index in records.indices where records[index].state == .complete && localFile(records[index]) == nil {
+        for index in records.indices where records[index].state == .complete && missing.contains(records[index].id) {
             records[index].state = .failed
             records[index].error = "The downloaded file was removed. Download it again."
             records[index].received = 0
@@ -163,10 +231,11 @@ final class DownloadManager: ObservableObject {
 
     private func checkStorage(for record: DownloadRecord) throws {
         guard let free = availableBytes else { return }
-        let reserved = records.filter { $0.id != record.id && $0.isActive }.reduce(Int64(0)) {
-            let sum = $0.addingReportingOverflow($1.remainingBytes)
-            return sum.overflow ? Int64.max : sum.partialValue
-        }
+        let reserved = records.filter { $0.id != record.id && ($0.state == .preparing || $0.state == .downloading) }
+            .reduce(Int64(0)) {
+                let sum = $0.addingReportingOverflow($1.remainingBytes)
+                return sum.overflow ? Int64.max : sum.partialValue
+            }
         if record.remainingBytes > max(0, free - min(max(0, free), reserved)) {
             throw JellyfinDownloadError.diskSpace
         }
@@ -195,12 +264,22 @@ final class DownloadManager: ObservableObject {
     }
 
     func start(_ video: VideoItem) {
-        guard catalogReadable, let client, let directory, video.type == "Movie" || video.type == "Episode" else {
+        guard !isShuttingDown else { return }
+        if isLoadingCatalog {
+            let current = generation
+            Task { [weak self] in
+                await self?.waitUntilReady()
+                guard let self, self.generation == current else { return }
+                self.start(video)
+            }
             return
         }
-        checkLocalFiles()
+        guard catalogReadable, client != nil, directory != nil, video.type == "Movie" || video.type == "Episode" else {
+            return
+        }
         if let existing = record(for: video),
-            existing.isActive || existing.state == .pausing || existing.state == .complete
+            existing.isActive || existing.state == .pausing
+                || (existing.state == .complete && localFile(existing) != nil)
         {
             return
         }
@@ -213,20 +292,45 @@ final class DownloadManager: ObservableObject {
             records.append(DownloadRecord(id: id, video: video, series: series))
         }
         update(id) {
-            $0.state = .preparing
+            $0.state = .queued
             $0.error = nil
         }
+        queued.append(id)
+        drainQueue()
+    }
+
+    private func drainQueue() {
+        guard !isShuttingDown, !isLoadingCatalog, let client, let directory else { return }
+        while activeDownloads.count < maximumConcurrentDownloads, !queued.isEmpty {
+            guard let index = queued.firstIndex(where: { !activeDownloads.contains($0) && fileOperations[$0] == nil })
+            else {
+                return
+            }
+            let id = queued.remove(at: index)
+            guard let record = records.first(where: { $0.id == id && $0.state == .queued }) else { continue }
+            activeDownloads.insert(id)
+            launch(record.video, id: id, client: client, directory: directory)
+        }
+    }
+
+    private func launch(_ video: VideoItem, id: UUID, client: JellyfinClient, directory: URL) {
+        update(id) { $0.state = .preparing }
         let current = generation
         preparations[id] = Task { [weak self] in
             guard let self else { return }
             do {
                 let folder = directory.appendingPathComponent(id.uuidString, isDirectory: true)
-                try FileManager.default.createDirectory(
-                    at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                var values = URLResourceValues()
-                values.isExcludedFromBackup = true
-                var excluded = directory
-                try excluded.setResourceValues(values)
+                try await self.files.perform {
+                    try FileManager.default.createDirectory(
+                        at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                    var values = URLResourceValues()
+                    values.isExcludedFromBackup = true
+                    var excluded = directory
+                    try excluded.setResourceValues(values)
+                }
+                try Task.checkCancellation()
+                guard self.generation == current else { return }
+                await self.checkLocalFiles()
                 if self.records.first(where: { $0.id == id })?.prepared != true {
                     try await self.prepare(id: id, video: video, client: client, generation: current)
                 }
@@ -235,8 +339,13 @@ final class DownloadManager: ObservableObject {
                     return
                 }
                 let resumeURL = folder.appendingPathComponent("resume.data")
-                let resumeData = try? Data(contentsOf: resumeURL)
-                if resumeData == nil { self.update(id) { $0.received = 0 } }
+                let resumeData = try await self.files.perform { try? Data(contentsOf: resumeURL) }
+                try Task.checkCancellation()
+                guard self.generation == current else { return }
+                if resumeData == nil { self.update(id, persist: false) { $0.received = 0 } }
+                await self.checkLocalFiles()
+                try Task.checkCancellation()
+                guard self.generation == current else { return }
                 if let currentRecord = self.records.first(where: { $0.id == id }) {
                     try self.checkStorage(for: currentRecord)
                 }
@@ -252,103 +361,190 @@ final class DownloadManager: ObservableObject {
                         }
                     },
                     onComplete: { [weak self] result in
-                        guard let self, self.generation == current, self.transfers[id]?.id == token else { return }
-                        self.transfers[id] = nil
-                        switch result {
-                        case .success(let url):
-                            self.update(id) {
-                                $0.state = .complete
-                                $0.received = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-                                $0.expected = $0.received
-                            }
-                            try? FileManager.default.removeItem(at: resumeURL)
-                        case .failure(let error):
-                            // Native resume data can expire, or contain an old session header.
-                            // Retry once with the current authenticated request and a fresh file.
-                            let nativeError = error as NSError
-                            if resumeData != nil,
-                                (nativeError.domain == NSURLErrorDomain
-                                    && [NSURLErrorCannotOpenFile, NSURLErrorFileDoesNotExist, NSURLErrorUnknown]
-                                        .contains(nativeError.code))
-                                    || (error as? JellyfinDownloadError) == .signIn
-                            {
-                                try? FileManager.default.removeItem(at: resumeURL)
-                                self.update(id) {
-                                    $0.state = .paused
-                                    $0.received = 0
-                                }
-                                self.start(video)
-                                return
-                            }
-                            if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
-                                try? data.write(to: resumeURL, options: .atomic)
-                            } else {
-                                try? FileManager.default.removeItem(at: resumeURL)
-                            }
-                            self.update(id) {
-                                $0.state = .failed
-                                $0.error = JellyfinDownloadError.message(for: error)
-                            }
+                        Task { [weak self] in
+                            await self?.complete(
+                                result, id: id, token: token, generation: current,
+                                resumeURL: resumeURL, wasResumed: resumeData != nil)
                         }
                     })
                 self.transfers[id] = transfer
                 self.preparations[id] = nil
                 self.update(id) { $0.state = .downloading }
+                self.registerArtwork()
                 transfer.start()
             } catch {
                 guard !Task.isCancelled, self.generation == current else { return }
                 self.preparations[id] = nil
+                self.activeDownloads.remove(id)
                 self.update(id) {
                     $0.state = .failed
                     $0.error = JellyfinDownloadError.message(for: error)
                 }
+                self.drainQueue()
+            }
+        }
+    }
+
+    private func complete(
+        _ result: Result<Int64, Error>, id: UUID, token: UUID,
+        generation current: UUID, resumeURL: URL, wasResumed: Bool
+    ) async {
+        guard generation == current, transfers[id]?.id == token else { return }
+        // Keep the slot occupied until completion bookkeeping finishes.
+        defer {
+            if generation == current {
+                transfers[id] = nil
+                activeDownloads.remove(id)
+                drainQueue()
+            }
+        }
+        switch result {
+        case .success(let size):
+            update(id) {
+                $0.state = .complete
+                $0.received = size
+                $0.expected = size
+            }
+            try? await files.perform { try FileManager.default.removeItem(at: resumeURL) }
+        case .failure(let error):
+            let nativeError = error as NSError
+            let retryFresh =
+                wasResumed
+                && ((nativeError.domain == NSURLErrorDomain
+                    && [NSURLErrorCannotOpenFile, NSURLErrorFileDoesNotExist, NSURLErrorUnknown].contains(
+                        nativeError.code))
+                    || (error as? JellyfinDownloadError) == .signIn)
+            let data = retryFresh ? nil : nativeError.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+            try? await files.perform {
+                if let data {
+                    try data.write(to: resumeURL, options: .atomic)
+                } else if FileManager.default.fileExists(atPath: resumeURL.path) {
+                    try FileManager.default.removeItem(at: resumeURL)
+                }
+            }
+            guard generation == current, transfers[id]?.id == token else { return }
+            update(id) {
+                $0.state = retryFresh ? .paused : .failed
+                $0.error = retryFresh ? nil : JellyfinDownloadError.message(for: error)
+                if retryFresh { $0.received = 0 }
+            }
+            if retryFresh {
+                update(id) { $0.state = .queued }
+                queued.append(id)
             }
         }
     }
 
     func pause(_ record: DownloadRecord) async {
-        preparations.removeValue(forKey: record.id)?.cancel()
-        let transfer = transfers.removeValue(forKey: record.id)
         let current = generation
+        if let operation = fileOperations[record.id] {
+            await operation.task.value
+            guard generation == current else { return }
+            if fileOperations[record.id]?.token == operation.token { fileOperations[record.id] = nil }
+        }
+        guard records.contains(where: { $0.id == record.id && $0.isActive }) else { return }
+        queued.removeAll { $0 == record.id }
+        let preparation = preparations.removeValue(forKey: record.id)
+        preparation?.cancel()
+        let transfer = transfers.removeValue(forKey: record.id)
         let resumeURL = fileURL(record, name: "resume.data")
         update(record.id) { $0.state = .pausing }
-        if let data = await transfer?.pause(), let resumeURL {
-            try? data.write(to: resumeURL, options: .atomic)
+        let token = UUID()
+        let operation = Task {
+            await preparation?.value
+            if let data = await transfer?.pause(), let resumeURL {
+                try? await files.perform { try data.write(to: resumeURL, options: .atomic) }
+            }
+            guard generation == current else { return }
+            activeDownloads.remove(record.id)
+            if records.first(where: { $0.id == record.id })?.state == .pausing {
+                update(record.id) { $0.state = .paused }
+                registerArtwork()
+            }
+            drainQueue()
         }
-        if generation == current, records.first(where: { $0.id == record.id })?.state == .pausing {
-            update(record.id) { $0.state = .paused }
+        fileOperations[record.id] = (token, operation)
+        await operation.value
+        if fileOperations[record.id]?.token == token {
+            fileOperations[record.id] = nil
+            drainQueue()
         }
     }
 
     func remove(_ record: DownloadRecord) async {
-        preparations.removeValue(forKey: record.id)?.cancel()
+        guard let original = records.first(where: { $0.id == record.id }), original.state != .removed else { return }
+        queued.removeAll { $0 == record.id }
+        let preparation = preparations.removeValue(forKey: record.id)
+        preparation?.cancel()
         transfers.removeValue(forKey: record.id)?.cancel()
-        // Cancelling without producing resume data lets URLSession discard its partial file.
-        if let resume = fileURL(record, name: "resume.data"), let data = try? Data(contentsOf: resume) {
-            assets.downloadTask(withResumeData: data).cancel()
-        }
+        let current = generation
+        let resumeURL = fileURL(record, name: "resume.data")
         guard let folder = directory?.appendingPathComponent(record.id.uuidString) else { return }
-        do {
-            if FileManager.default.fileExists(atPath: folder.path) { try FileManager.default.removeItem(at: folder) }
-            if records.first(where: { $0.id == record.id })?.progress?.pendingSync == true {
-                update(record.id) {
-                    $0.state = .removed
-                    $0.received = 0
-                    $0.artworks = [:]
-                    $0.subtitles = []
-                    $0.prepared = false
-                }
-            } else {
-                records.removeAll { $0.id == record.id }
+        // Persist the removal before deleting files. An account switch during I/O
+        // must not restore this record or discard pending watch progress.
+        if original.progress?.pendingSync == true {
+            update(record.id) {
+                $0.state = .removed
+                $0.received = 0
+                $0.artworks = [:]
+                $0.subtitles = []
+                $0.prepared = false
             }
+        } else {
+            records.removeAll { $0.id == record.id }
             save()
-            registerArtwork()
-        } catch { errorMessage = "The download couldn’t be removed: \(error.localizedDescription)" }
+        }
+        registerArtwork()
+        let previous = fileOperations[record.id]?.task
+        let token = UUID()
+        let operation = Task {
+            defer {
+                if generation == current {
+                    activeDownloads.remove(record.id)
+                    drainQueue()
+                }
+            }
+            await previous?.value
+            await preparation?.value
+            await flush()
+            do {
+                let data = try await files.perform {
+                    let data = resumeURL.flatMap { try? Data(contentsOf: $0) }
+                    if FileManager.default.fileExists(atPath: folder.path) {
+                        try FileManager.default.removeItem(at: folder)
+                    }
+                    return data
+                }
+                if let data { assets.downloadTask(withResumeData: data).cancel() }
+            } catch {
+                guard generation == current else { return }
+                if self.record(for: original.video) == nil {
+                    var restored = records.first(where: { $0.id == record.id }) ?? original
+                    restored.state = .failed
+                    records.removeAll { $0.id == record.id }
+                    records.append(restored)
+                    save()
+                    registerArtwork()
+                }
+                errorMessage = "The download couldn’t be removed: \(error.localizedDescription)"
+            }
+        }
+        fileOperations[record.id] = (token, operation)
+        await operation.value
+        if fileOperations[record.id]?.token == token {
+            fileOperations[record.id] = nil
+            drainQueue()
+        }
     }
 
     func shutdown() async {
+        isShuttingDown = true
+        await waitUntilReady()
+        let finishing = fileOperations.values.map(\.task)
+        for operation in finishing { await operation.value }
         for record in records where record.isActive { await pause(record) }
         save()
+        await flush()
     }
 
     func saveProgress(
@@ -426,7 +622,7 @@ final class DownloadManager: ObservableObject {
         let ext = (source?.container ?? "media").components(separatedBy: ",").first ?? "media"
         let safeExtension =
             ext.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) } && ext.count <= 12 ? ext : "media"
-        update(id) {
+        update(id, persist: false) {
             $0.video = detail
             $0.sourceID = source?.id ?? detail.id
             $0.videoFile = "video.\(safeExtension)"
@@ -437,12 +633,12 @@ final class DownloadManager: ObservableObject {
             let series = try await client.item(id: seriesID)
             try Task.checkCancellation()
             guard generation == current else { throw CancellationError() }
-            update(id) { $0.series = series }
+            update(id, persist: false) { $0.series = series }
             let next = try? await client.nextEpisode(after: detail)
             let markers = (try? await client.mediaSegments(itemID: detail.id)) ?? []
             try Task.checkCancellation()
             guard generation == current else { throw CancellationError() }
-            update(id) {
+            update(id, persist: false) {
                 $0.nextEpisodeID = next?.id
                 $0.creditsStart = markers.filter { $0.type == "Outro" && $0.startTicks > 0 }.map(\.startSeconds).min()
                 $0.intro = markers.filter { $0.type == "Intro" && $0.isSkippable }.min { $0.startTicks < $1.startTicks }
@@ -474,26 +670,35 @@ final class DownloadManager: ObservableObject {
             }
             let request = try client.subtitleDownloadRequest(
                 itemID: detail.id, sourceID: source?.id ?? detail.id, index: index, format: format)
-            let (temporary, response) = try await assets.download(for: request)
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            try Task.checkCancellation()
-            guard generation == current else { throw CancellationError() }
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw JellyfinDownloadError.invalidFile }
+            let (temporary, response) = try await assets.download(for: request, delegate: JellyfinRedirectPolicy.shared)
+            guard !Task.isCancelled, generation == current,
+                (response as? HTTPURLResponse)?.statusCode == 200
+            else {
+                try? await files.perform { try FileManager.default.removeItem(at: temporary) }
+                try Task.checkCancellation()
+                guard generation == current else { throw CancellationError() }
+                throw JellyfinDownloadError.invalidFile
+            }
             let name = "subtitle-\(index).\(format)"
             guard let url = fileURL(record, name: name) else { throw CancellationError() }
-            try? FileManager.default.removeItem(at: url)
-            try FileManager.default.moveItem(at: temporary, to: url)
-            update(id) {
+            try await files.perform {
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                try? FileManager.default.removeItem(at: url)
+                try FileManager.default.moveItem(at: temporary, to: url)
+            }
+            try Task.checkCancellation()
+            guard generation == current else { throw CancellationError() }
+            update(id, persist: false) {
                 $0.subtitles.removeAll { $0.index == index }
                 $0.subtitles.append(.init(index: index, name: track.label, file: name))
             }
         }
-        update(id) { $0.prepared = true }
+        update(id, persist: false) { $0.prepared = true }
     }
 
     private func cacheArtwork(_ request: URLRequest, id: UUID, generation current: UUID) async throws {
         do {
-            let (data, response) = try await assets.data(for: request)
+            let (data, response) = try await assets.data(for: request, delegate: JellyfinRedirectPolicy.shared)
             try Task.checkCancellation()
             guard generation == current else { throw CancellationError() }
             guard (response as? HTTPURLResponse)?.statusCode == 200, NSImage(data: data) != nil,
@@ -502,9 +707,10 @@ final class DownloadManager: ObservableObject {
             let key = ArtworkCache.localKey(request)
             let name = "art-\(Self.digest(key)).image"
             guard let url = fileURL(record, name: name) else { return }
-            try data.write(to: url, options: .atomic)
-            update(id) { $0.artworks[key] = name }
-            registerArtwork()
+            try await files.perform { try data.write(to: url, options: .atomic) }
+            try Task.checkCancellation()
+            guard generation == current else { throw CancellationError() }
+            update(id, persist: false) { $0.artworks[key] = name }
         } catch {
             try Task.checkCancellation()
             // Missing artwork doesn't prevent downloading a playable video.
@@ -541,15 +747,58 @@ final class DownloadManager: ObservableObject {
         }
         ArtworkCache.shared.setLocalArtwork(files)
     }
+    private func rebuildCatalog() {
+        recordsByVideo = [:]
+        recordsBySeries = [:]
+        var nextTitles: [VideoItem] = []
+        for (index, record) in records.enumerated() where record.state != .removed {
+            recordsByVideo[record.video.id] = index
+            if let seriesID = record.video.seriesID {
+                recordsBySeries[seriesID, default: []].append(record)
+            }
+            if record.video.type == "Movie" { nextTitles.append(record.displayedVideo) }
+        }
+        for group in recordsBySeries.values {
+            guard let first = group.first else { continue }
+            let show = (group.first(where: \.prepared) ?? first).series ?? first.displayedVideo
+            nextTitles.append(cachedVideo(id: show.id) ?? show)
+        }
+        titles = nextTitles.sorted {
+            ($0.sortName ?? $0.name).localizedStandardCompare($1.sortName ?? $1.name) == .orderedAscending
+        }
+        catalogRevision += 1
+    }
+
     private func save() {
-        guard catalogReadable, let directory, !records.isEmpty || FileManager.default.fileExists(atPath: directory.path)
-        else { return }
-        do {
-            try FileManager.default.createDirectory(
-                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let file = directory.appendingPathComponent("catalog.json")
-            try JSONEncoder().encode(records).write(to: file, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-        } catch { errorMessage = "Downloads couldn’t be saved: \(error.localizedDescription)" }
+        rebuildCatalog()
+        guard catalogReadable, !isLoadingCatalog, let directory else { return }
+        pendingSaves[directory] = records
+        guard saveTask == nil else { return }
+        saveTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.saveTask = nil }
+            while let (directory, snapshot) = self.pendingSaves.first {
+                self.pendingSaves[directory] = nil
+                do {
+                    try await self.files.perform {
+                        guard !snapshot.isEmpty || FileManager.default.fileExists(atPath: directory.path) else {
+                            return
+                        }
+                        try FileManager.default.createDirectory(
+                            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                        let file = directory.appendingPathComponent("catalog.json")
+                        try JSONEncoder().encode(snapshot).write(to: file, options: .atomic)
+                        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                    }
+                } catch {
+                    let failure = error as NSError
+                    self.logger.error(
+                        "Catalog write failed: domain=\(failure.domain, privacy: .public) code=\(failure.code)")
+                    if self.directory == directory {
+                        self.errorMessage = "Downloads couldn’t be saved: \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
     }
 }

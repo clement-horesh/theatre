@@ -158,6 +158,42 @@ final class PlayerIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testCompatibleRetryKeepsCurrentPositionAndPausedState() async throws {
+        _ = NSApplication.shared
+        let server = PlaybackFixtureServer(mediaDirectory: fixtures, allowsCompatiblePlayback: true)
+        let client = try await signedIn(server)
+        defer { server.stop() }
+        let page = try await client.videos(search: "h264-aac.mp4")
+        let video = try XCTUnwrap(page.items.first)
+        let suite = "local.theatre.retry-tests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = PlaybackSession(preferences: PlaybackPreferences(defaults: defaults))
+        session.client = client
+        session.playback.setVolume(0)
+        defer { session.stopPlayback() }
+        session.play(video)
+        try await waitUntil { session.playback.seconds > 0.3 && session.playback.canSeek }
+        session.playback.setPlaying(false)
+        try await waitUntil { !session.playback.isPlaying }
+        session.playback.seek(to: 3)
+        session.retryCompatible()
+        try await waitUntil {
+            !session.isStartingPlayback && !session.playback.isPreparing
+                && session.playback.canSeek && session.playback.seconds >= 2.9
+        }
+        XCTAssertEqual(session.playback.seconds, 3, accuracy: 0.3)
+        XCTAssertFalse(session.playback.isPlaying)
+        session.playback.setPlaying(true)
+        try await waitUntil { session.playback.isPlaying && session.playback.seconds > 3.3 }
+        let position = session.playback.seconds
+        session.retryCompatible()
+        try await waitUntil { session.playback.isPlaying && session.playback.seconds >= position - 0.2 }
+        XCTAssertGreaterThan(session.playback.seconds, 3)
+        await session.shutdown()
+    }
+
+    @MainActor
     private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<120 {
             if condition() { return }

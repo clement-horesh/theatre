@@ -8,10 +8,14 @@ let package = Package(
         .library(name: "JellyfinKit", targets: ["JellyfinKit"]),
         .executable(name: "Theatre", targets: ["JellyMac"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0")
+    ],
     targets: [
         .binaryTarget(name: "VLCKit", path: "Vendor/VLCKit.xcframework"),
         .target(name: "JellyfinKit"),
-        .executableTarget(name: "JellyMac", dependencies: ["JellyfinKit", "VLCKit"]),
+        .executableTarget(
+            name: "JellyMac", dependencies: ["JellyfinKit", "VLCKit", .product(name: "Sparkle", package: "Sparkle")]),
         .testTarget(name: "JellyfinKitTests", dependencies: ["JellyfinKit"]),
         .testTarget(name: "JellyMacTests", dependencies: ["JellyMac", "JellyfinKit"], resources: [.copy("Fixtures")]),
     ]

@@ -31,6 +31,13 @@ final class FeaturedRecommendationsTests: XCTestCase {
         }
     }
 
+    func testServerResumeOrderIsPreservedAcrossDifferentDateOffsets() throws {
+        let newest = try item("newer", position: 200_000_000, lastPlayed: "2026-10-18T10:30:00Z")
+        let older = try item("older", position: 200_000_000, lastPlayed: "2026-10-18T11:00:00+01:00")
+        XCTAssertEqual(
+            FeaturedRecommendations.candidates(recent: [], continuing: [newest, older]).map(\.id), ["newer", "older"])
+    }
+
     func testDuplicateMovieUsesCurrentResumeStateAndAppearsOnlyOnce() throws {
         let recent = try item("overlap", played: false)
         let resumed = try item("overlap", position: 200_000_000)

@@ -277,7 +277,8 @@ public struct JellyfinClient: Sendable {
                 await request(
                     "MediaSegments/\(itemID)",
                     query: [
-                        .init(name: "includeSegmentTypes", value: "Intro,Outro")
+                        .init(name: "includeSegmentTypes", value: "Intro"),
+                        .init(name: "includeSegmentTypes", value: "Outro"),
                     ]))
             return page.items.filter { $0.startTicks >= 0 }
         } catch JellyfinError.serverStatus(404) { return [] }
@@ -560,7 +561,7 @@ public struct JellyfinClient: Sendable {
             request.httpBody = try JSONEncoder().encode(body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        let (data, response) = try await transport.data(for: request)
+        let (data, response) = try await transport.data(for: request, delegate: JellyfinRedirectPolicy.shared)
         guard let response = response as? HTTPURLResponse else { throw JellyfinError.invalidResponse }
         switch response.statusCode {
         case 200..<300: return data

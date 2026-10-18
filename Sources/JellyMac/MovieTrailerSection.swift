@@ -8,7 +8,9 @@ struct MovieTrailerSection: View {
     @FocusState private var focusedTrailer: String?
 
     private var trailer: TrailerPresentation? {
-        guard let first = video.remoteTrailers?.first, let url = first.webURL else { return nil }
+        guard let first = video.remoteTrailers?.first(where: { $0.webURL != nil }), let url = first.webURL else {
+            return nil
+        }
         let name = first.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         return TrailerPresentation(
             title: name.flatMap { $0.isEmpty ? nil : $0 } ?? "\(video.name) Trailer", url: url)

@@ -3,6 +3,7 @@ import AppKit
 import Combine
 import Foundation
 import JellyfinKit
+import OSLog
 
 /// Owns one playback session, its engines, window and server lifecycle.
 @MainActor
@@ -33,6 +34,7 @@ final class PlaybackSession: ObservableObject {
     private var cleanupTask: Task<Void, Never>?
     private var routePickerOpen = false
     private let nowPlaying = NowPlayingController()
+    private let logger = Logger(subsystem: "local.jellymac.app", category: "Playback")
     var pendingReport: Task<Void, Error>? { playbackReporter.pendingTask }
     var offersNextEpisode: Bool {
         nextEpisode != nil && (playback.hasEnded || creditsStart.map { playback.seconds >= $0 } == true)
@@ -98,7 +100,10 @@ final class PlaybackSession: ObservableObject {
 
     func playerFullscreenChanged(_ fullscreen: Bool) { isVideoFullscreen = fullscreen }
 
-    func play(_ video: VideoItem, compatibleOnly: Bool = false, startFromBeginning: Bool = false) {
+    func play(
+        _ video: VideoItem, compatibleOnly: Bool = false, startFromBeginning: Bool = false,
+        at position: Double? = nil, playing: Bool = true
+    ) {
         guard let client else { return }
         let nativePlayback = playback.usesApplePlayback && !compatibleOnly
         stopPlayback(leaveFullscreen: false, closeWindow: false, preservingApplePlayback: nativePlayback)
@@ -128,6 +133,7 @@ final class PlaybackSession: ObservableObject {
                     return
                 }
                 if startFromBeginning { result.resumePositionSeconds = 0 }
+                if let position, position.isFinite { result.resumePositionSeconds = max(0, position) }
                 stream = result
                 showPlayer(for: video, aspectRatio: result.videoAspectRatio)
                 nowPlaying.activate(
@@ -142,10 +148,10 @@ final class PlaybackSession: ObservableObject {
                     next: video.type == "Episode" ? { [weak self] in self?.playNextEpisode() } : nil)
                 if let native {
                     playback.playApple(
-                        native.item, stream: result, at: result.resumePositionSeconds, playing: true,
+                        native.item, stream: result, at: result.resumePositionSeconds, playing: playing,
                         preserveTracks: false)
                 } else {
-                    playback.play(result)
+                    playback.play(result, playing: playing)
                 }
                 isStartingPlayback = false
             } catch is CancellationError {
@@ -164,7 +170,13 @@ final class PlaybackSession: ObservableObject {
         playerWindow?.show(title: video.name)
     }
 
-    func retryCompatible() { if let currentVideo { play(currentVideo, compatibleOnly: true) } }
+    func retryCompatible() {
+        guard let currentVideo else { return }
+        // A failure before playback starts must retain the original saved resume point.
+        let position = playback.seconds > 0 ? playback.seconds : currentVideo.resumePositionSeconds
+        let playing = playback.isPlaying || playback.errorMessage != nil || playbackError != nil
+        play(currentVideo, compatibleOnly: true, at: position, playing: playing)
+    }
 
     func prepareSystemPlayback(reportErrors: Bool = true) async -> Bool {
         if playback.usesApplePlayback { return true }
@@ -182,12 +194,14 @@ final class PlaybackSession: ObservableObject {
             do {
                 let prepared = try await loadAppleStream(video: video, client: client, preserveSelection: true)
                 let result = prepared.stream
+                var adopted = false
+                defer { if !adopted { releaseEncoding(result, client: client) } }
                 try Task.checkCancellation()
                 guard systemPlaybackGeneration == generation, currentVideo?.id == video.id else {
-                    releaseEncoding(result, client: client)
                     return false
                 }
                 preparedSystemStream = result
+                adopted = true
                 if !routePickerOpen { scheduleUnusedPreparationCleanup() }
                 return true
             } catch {
@@ -394,7 +408,10 @@ final class PlaybackSession: ObservableObject {
         let previous = cleanupTask
         cleanupTask = Task {
             await previous?.value
-            try? await client.stopEncoding(stream)
+            do { try await client.stopEncoding(stream) } catch {
+                let failure = error as NSError
+                logger.error("Encoding cleanup failed: domain=\(failure.domain, privacy: .public) code=\(failure.code)")
+            }
         }
     }
 

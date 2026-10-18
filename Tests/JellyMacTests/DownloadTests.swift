@@ -38,6 +38,7 @@ final class DownloadTests: XCTestCase {
         let video = try XCTUnwrap(page.items.first)
         let downloads = DownloadManager(root: root)
         downloads.configure(client: client)
+        await downloads.waitUntilReady()
         downloads.start(video)
         try await waitUntil {
             downloads.record(for: video)?.state == .complete || downloads.record(for: video)?.state == .failed
@@ -48,6 +49,7 @@ final class DownloadTests: XCTestCase {
 
         let reopened = DownloadManager(root: root)
         reopened.configure(client: client)
+        await reopened.waitUntilReady()
         let store = MemorySessionStore()
         store.saved = SavedSession(
             address: client.serverURL.absoluteString, deviceID: client.deviceID, session: try XCTUnwrap(client.session))
@@ -92,8 +94,10 @@ final class DownloadTests: XCTestCase {
         player.stop()
 
         reopened.saveProgress(itemID: video.id, seconds: 3, duration: 8, paused: true, force: true)
+        await reopened.flush()
         let restored = DownloadManager(root: root)
         restored.configure(client: client)
+        await restored.waitUntilReady()
         XCTAssertEqual(restored.playbackStream(for: video)?.resumePositionSeconds, 3)
         var watchedElsewhere = video
         watchedElsewhere.userData = VideoUserData(
@@ -120,6 +124,7 @@ final class DownloadTests: XCTestCase {
         let video = try XCTUnwrap(page.items.first)
         let downloads = DownloadManager(root: root.appendingPathComponent("downloads"))
         downloads.configure(client: client)
+        await downloads.waitUntilReady()
         downloads.start(video)
         try await waitUntil { (downloads.record(for: video)?.received ?? 0) > 0 }
         await downloads.pause(try XCTUnwrap(downloads.record(for: video)))
@@ -133,6 +138,7 @@ final class DownloadTests: XCTestCase {
         await downloads.shutdown()
         let reopened = DownloadManager(root: root.appendingPathComponent("downloads"))
         reopened.configure(client: client)
+        await reopened.waitUntilReady()
         reopened.start(video)
         try await waitUntil {
             reopened.record(for: video)?.state == .complete || reopened.record(for: video)?.state == .failed
@@ -154,6 +160,7 @@ final class DownloadTests: XCTestCase {
         let video = try XCTUnwrap(page.items.first)
         let downloads = DownloadManager(root: root)
         downloads.configure(client: client)
+        await downloads.waitUntilReady()
         downloads.start(video)
         try await waitUntil { downloads.record(for: video)?.state == .failed }
         XCTAssertTrue(downloads.record(for: video)?.error?.contains("isn’t allowed") == true)
@@ -173,6 +180,7 @@ final class DownloadTests: XCTestCase {
         var free: Int64 = 0
         let downloads = DownloadManager(root: root, availableSpace: { free })
         downloads.configure(client: client)
+        await downloads.waitUntilReady()
         downloads.start(video)
         try await waitUntil { downloads.record(for: video)?.state == .failed }
         XCTAssertTrue(downloads.record(for: video)?.error?.contains("storage") == true)
@@ -182,7 +190,7 @@ final class DownloadTests: XCTestCase {
         try await waitUntil { downloads.record(for: video)?.state == .complete }
         let file = try XCTUnwrap(downloads.playbackStream(for: video)).url
         try FileManager.default.removeItem(at: file)
-        downloads.checkLocalFiles()
+        await downloads.checkLocalFiles()
         XCTAssertEqual(downloads.record(for: video)?.state, .failed)
         XCTAssertEqual(downloads.record(for: video)?.received, 0)
         downloads.start(video)
@@ -210,6 +218,7 @@ final class DownloadTests: XCTestCase {
         let catalog = root.appendingPathComponent("downloads")
         let downloads = DownloadManager(root: catalog, configuration: configuration)
         downloads.configure(client: client)
+        await downloads.waitUntilReady()
         downloads.start(video)
         try await waitUntil { (downloads.record(for: video)?.received ?? 0) > 0 }
         server.stop()
@@ -220,6 +229,7 @@ final class DownloadTests: XCTestCase {
         XCTAssertEqual(restarted, client.serverURL)
         let reopened = DownloadManager(root: catalog)
         reopened.configure(client: client)
+        await reopened.waitUntilReady()
         XCTAssertEqual(reopened.record(for: video)?.state, .failed)
         reopened.start(video)
         try await waitUntil {
@@ -276,6 +286,7 @@ final class DownloadTests: XCTestCase {
         try JSONEncoder().encode(records).write(to: directory.appendingPathComponent("catalog.json"))
         let downloads = DownloadManager(root: root)
         downloads.configure(client: client)
+        await downloads.waitUntilReady()
         XCTAssertEqual(downloads.titles.map(\.id), ["show"])
         XCTAssertEqual(downloads.episodes(seriesID: "show").map(\.id), ["ep1", "ep2"])
         downloads.saveProgress(itemID: "ep1", seconds: 3, duration: 8, paused: true, force: true)
@@ -292,12 +303,14 @@ final class DownloadTests: XCTestCase {
             JellyfinSession.self, from: Data(#"{"userID":"two","username":"other","accessToken":"other-token"}"#.utf8))
         let other = try client.authenticated(with: otherSession)
         downloads.configure(client: other)
+        await downloads.waitUntilReady()
         XCTAssertTrue(downloads.titles.isEmpty)
         XCTAssertNil(downloads.playbackStream(for: second))
         let otherServer = try JellyfinClient(
             address: "https://another.test/jellyfin", deviceID: "test", session: session)
         XCTAssertNotEqual(DownloadManager.accountKey(client), DownloadManager.accountKey(otherServer))
         downloads.configure(client: client)
+        await downloads.waitUntilReady()
         XCTAssertEqual(downloads.episodes(seriesID: "show").map(\.id), ["ep2"])
     }
 

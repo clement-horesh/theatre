@@ -1,4 +1,5 @@
 import AppKit
+import JellyfinKit
 import SwiftUI
 
 /// A memory-only cache shared by this application's artwork views.
@@ -42,7 +43,7 @@ final class ArtworkCache {
             task = existing
         } else {
             task = Task { [session] in
-                let (data, response) = try await session.data(for: request)
+                let (data, response) = try await session.data(for: request, delegate: JellyfinRedirectPolicy.shared)
                 try Task.checkCancellation()
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
                 return data

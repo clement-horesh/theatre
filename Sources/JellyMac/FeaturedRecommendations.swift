@@ -4,14 +4,7 @@ enum FeaturedRecommendations {
     /// The inputs are server-ordered by added date and last playback respectively.
     static func candidates(recent: [VideoItem], continuing: [VideoItem]) -> [VideoItem] {
         let recentTitles = Array(recent.filter { $0.type != "Episode" }.prefix(10))
-        let movies = continuing.enumerated()
-            .filter { $0.element.type == "Movie" && $0.element.isInProgress }
-            .sorted {
-                let lhs = $0.element.userData?.lastPlayedDate ?? ""
-                let rhs = $1.element.userData?.lastPlayedDate ?? ""
-                return lhs == rhs ? $0.offset < $1.offset : lhs > rhs
-            }
-            .prefix(5).map(\.element)
+        let movies = continuing.filter { $0.type == "Movie" && $0.isInProgress }.prefix(5)
         // Prefer the latest playback information when a movie appears in both sources.
         let resumeByID = Dictionary(movies.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var seen = Set<String>()

@@ -5,18 +5,48 @@ import Network
 /// Loopback-only Jellyfin fixture for integration tests; never included in the app.
 final class PlaybackFixtureServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "JellyMac.local-demo")
-    private let token = UUID().uuidString
+    private var token = UUID().uuidString  // Used only on queue.
     let mediaDirectory: URL
     private let allowsDownloads: Bool
     private let chunkDelay: TimeInterval
+    private let authenticationRedirect: URL?
+    private let allowsCompatiblePlayback: Bool
+    private var loginRequestCount = 0  // Used only on queue.
+    private var rejectedDownloadCount = 0  // Used only on queue.
     private var listener: NWListener?
     private var connections: [UUID: NWConnection] = [:]  // Used only on queue.
     @MainActor private(set) var address: URL?
 
-    init(mediaDirectory: URL, allowsDownloads: Bool = true, chunkDelay: TimeInterval = 0) {
+    init(
+        mediaDirectory: URL, allowsDownloads: Bool = true, chunkDelay: TimeInterval = 0,
+        authenticationRedirect: URL? = nil, allowsCompatiblePlayback: Bool = false
+    ) {
         self.mediaDirectory = mediaDirectory
         self.allowsDownloads = allowsDownloads
         self.chunkDelay = chunkDelay
+        self.authenticationRedirect = authenticationRedirect
+        self.allowsCompatiblePlayback = allowsCompatiblePlayback
+    }
+
+    func loginRequests() async -> Int {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.loginRequestCount) }
+        }
+    }
+
+    func expireSessions() async {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.token = UUID().uuidString
+                continuation.resume()
+            }
+        }
+    }
+
+    func rejectedDownloads() async -> Int {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.rejectedDownloadCount) }
+        }
     }
 
     private func catalog() -> [DemoVideo] {
@@ -137,7 +167,11 @@ final class PlaybackFixtureServer: @unchecked Sendable {
         if request.path == "/System/Info/Public" {
             return .json(["ServerName": "Theatre Local Demo", "Version": "10.11.0", "Id": "local-demo"])
         }
-        if request.path == "/Users/AuthenticateByName", request.method == "POST" {
+        if ["/Users/AuthenticateByName", "/redirected-login"].contains(request.path), request.method == "POST" {
+            loginRequestCount += 1
+            if request.path == "/Users/AuthenticateByName", let authenticationRedirect {
+                return Response(status: 307, headers: ["Location": authenticationRedirect.absoluteString])
+            }
             let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any]
             guard body?["Username"] as? String == "demo", body?["Pw"] as? String == "demo" else {
                 return Response(status: 401)
@@ -150,7 +184,10 @@ final class PlaybackFixtureServer: @unchecked Sendable {
         let authorized =
             request.headers["authorization"]?.contains("Token=\"\(token)\"") == true
             || request.query["api_key"] == token
-        guard authorized else { return Response(status: 401) }
+        guard authorized else {
+            if request.path.hasSuffix("/Download") { rejectedDownloadCount += 1 }
+            return Response(status: 401)
+        }
         if request.path == "/Items", request.method == "GET" {
             let search = request.query["searchTerm"] ?? ""
             let ids = Set((request.query["ids"] ?? "").split(separator: ",").map(String.init))
@@ -183,6 +220,8 @@ final class PlaybackFixtureServer: @unchecked Sendable {
         if segments.count == 3, segments[0] == "Items", segments[2] == "PlaybackInfo", request.method == "POST",
             let video = catalog().first(where: { $0.id == segments[1] })
         {
+            let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any]
+            let compatible = allowsCompatiblePlayback && body?["EnableDirectPlay"] as? Bool == false
             let sessionID = UUID().uuidString.replacingOccurrences(of: "-", with: "")
             let tracks: [[String: Any]] = video.subtitles.map { subtitle in
                 [
@@ -191,14 +230,15 @@ final class PlaybackFixtureServer: @unchecked Sendable {
                     "DeliveryUrl": "/Videos/\(video.id)/subtitles/\(subtitle.index)",
                 ]
             }
+            var source: [String: Any] = [
+                "Id": video.id, "Container": video.url.pathExtension.lowercased(),
+                "SupportsDirectPlay": !compatible, "SupportsDirectStream": !compatible,
+                "SupportsTranscoding": compatible, "RequiresOpening": false, "MediaStreams": tracks,
+            ]
+            // Exercise compatible retry transport using the same original fixture bytes.
+            if compatible { source["TranscodingUrl"] = "/Videos/\(video.id)/stream.mp4" }
             return .json([
-                "MediaSources": [
-                    [
-                        "Id": video.id, "Container": video.url.pathExtension.lowercased(),
-                        "SupportsDirectPlay": true, "SupportsDirectStream": true,
-                        "SupportsTranscoding": false, "RequiresOpening": false, "MediaStreams": tracks,
-                    ]
-                ],
+                "MediaSources": [source],
                 "PlaySessionId": sessionID,
             ])
         }
