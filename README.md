@@ -2,6 +2,18 @@
 
 A native macOS Jellyfin client with a dark SwiftUI interface, Liquid Glass controls, and embedded VideoLAN VLCKit for broad-format playback.
 
+## Architecture
+
+Theatre connects directly to your Jellyfin server from your Mac. The server provides the library, metadata, and watch history; the native app handles browsing, playback, and offline downloads.
+
+[![Theatre architecture: SwiftUI and AppModel coordinate Jellyfin API access, VLC and AVPlayer playback, secure sign-in, and account-scoped offline downloads.](docs/theatre-architecture.svg)](docs/theatre-architecture.svg)
+
+`AppModel` manages sign-in and library state, while `PlaybackSession` coordinates the player window, stream selection, and progress reporting through the reusable `JellyfinKit` library. VLC handles broad-format playback; AVPlayer provides native Picture in Picture and AirPlay with compatible media or a compatible stream from Jellyfin.
+
+Completed downloads play from account-scoped local files. Watch progress stays on the Mac while offline and syncs when the server is available, preserving newer viewing activity from another device. Keychain stores the server-issued token; Theatre never saves your password.
+
+[View the full-size diagram](docs/theatre-architecture.svg) · [Editable HTML source](docs/theatre-architecture.html)
+
 ## Download
 
 Theatre 0.1.1 is packaged for **Apple Silicon Macs (M1 or later)**. [Download Theatre-0.1.1.dmg](https://github.com/clement-horesh/theatre/releases/download/v0.1.1/Theatre-0.1.1.dmg), drag Theatre into Applications, and connect to your own Jellyfin server. No server or media is included.
