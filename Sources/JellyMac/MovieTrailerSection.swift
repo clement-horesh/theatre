@@ -53,7 +53,7 @@ private struct TrailerCard: View {
                         ) {
                             JellyfinArtwork(
                                 request: try? client?.imageRequest(for: video, type: .backdrop, maxWidth: 900),
-                                progressBlurHeight: 110, progressBlurRadius: 24
+                                blurHashes: video.imageBlurHashes, progressBlurHeight: 110, progressBlurRadius: 24
                             ) { Color(white: 0.12) }
                         }
                         .frame(width: geometry.size.width, height: geometry.size.height).clipped()

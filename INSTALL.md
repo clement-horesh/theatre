@@ -2,7 +2,7 @@
 
 This release is for **Apple Silicon Macs (M1 or later)**. The deployment target is macOS 13; hands-on validation has been on macOS 27.2. Older macOS versions have not yet been verified. Theatre requires your own Jellyfin server and account. It includes no films, shows, or server.
 
-1. Download `Theatre-0.1.1.dmg` from this repository’s GitHub Releases page.
+1. Download `Theatre-0.2.0.dmg` from this repository’s GitHub Releases page.
 2. Open the disk image and drag **Theatre** into **Applications**.
 3. Eject the disk image and open Theatre from Applications.
 4. Enter your Jellyfin server address, including `http://` or `https://` and any port or base path, then your Jellyfin username and password.
@@ -23,10 +23,14 @@ The original 0.1.0 beta needs one manual update: quit Theatre and replace it in 
 
 Starting with 0.1.1, use the macOS **Theatre → Update App → Check for Updates…** menu. A dot appears in the menu title when a newer version is available. Choose **Install Update…** to see the release notes and download, install, and restart. Checks run daily unless disabled in that menu or Settings. Theatre saves playback progress and pauses downloads before an update restarts it. Scheduled checks do not interrupt playback. Feed and update signatures are verified before installation. This does not replace Apple notarization or remove macOS's first-launch checks.
 
-Theatre saves the Jellyfin session token in Keychain, not your password. Ad-hoc builds do not have a stable verified developer identity, so macOS may ask you to authorize Keychain access again after an update. **Theatre → Server → Sign Out** removes the saved session. Do not share passwords, session tokens, or private server addresses in public bug reports.
+Add more servers with **Theatre → Server → Add Server…**. Their libraries and downloads appear together; Movies and Shows can be filtered by server.
+
+Theatre saves each Jellyfin session token in Keychain, not your password. Ad-hoc builds do not have a stable verified developer identity, so macOS may ask you to authorize Keychain access again after an update. Use the Sign Out action under a server in **Theatre → Server** to remove its saved session. Signing out of every server returns to onboarding. Do not share passwords, session tokens, or private server addresses in public bug reports.
 
 ## Known limitations
 
+- Jellyfin HTTPS connections accept unverified certificates, including self-signed certificates. The connection is encrypted, but the server’s identity is not verified. See [privacy information](PRIVACY.md).
+- Search uses Jellyfin’s native matching: for example, use `spider` or `Spider-Man`; `spiderman` without the hyphen does not match `Spider-Man`.
 - Intel builds are not included in this release.
 - HDR/Dolby Vision image accuracy, surround output, and AirPlay receiver behavior still need hardware validation. Source badges describe the file, not guaranteed output capabilities.
 - Native Picture in Picture and AirPlay depend on Apple’s supported formats; Jellyfin transcoding may be needed and must be permitted for your account.

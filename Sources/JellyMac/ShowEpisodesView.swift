@@ -16,16 +16,21 @@ struct ShowEpisodesView: View {
     @State private var episodeError: String?
     @State private var generation = UUID()
     @State private var retry = 0
+    @State private var loadedSeasonQuery: String?
+    @State private var loadedEpisodeQuery: String?
+    @State private var loadedSeasonID: String?
     @FocusState private var focusedEpisode: String?
 
     private var selectedSeason: SeasonOption? { seasons.first { $0.id == selectedSeasonID } }
     private var savedSeasonNumbers: [Int] {
-        Set(model.downloads.episodes(seriesID: series.id, completedOnly: false).map { $0.parentIndexNumber ?? 0 })
-            .sorted()
+        Set(
+            model.downloads.episodes(seriesID: series.libraryID, completedOnly: false).map { $0.parentIndexNumber ?? 0 }
+        )
+        .sorted()
     }
     private var visibleEpisodes: [VideoItem] {
         if model.showsDownloads || usesSavedEpisodes {
-            return model.downloads.episodes(seriesID: series.id, completedOnly: false)
+            return model.downloads.episodes(seriesID: series.libraryID, completedOnly: false)
                 .filter { ($0.parentIndexNumber ?? 0) == selectedSeason?.indexNumber }
         }
         return episodes
@@ -56,9 +61,22 @@ struct ShowEpisodesView: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 18) {
+                    if visibleEpisodes.isEmpty && (isLoadingSeasons || isLoadingEpisodes) {
+                        ForEach(0..<4) { _ in
+                            VStack(alignment: .leading, spacing: 12) {
+                                MediaCardSkeleton()
+                                LoadingPlaceholder().frame(width: 220, height: 16)
+                                LoadingPlaceholder().frame(height: 40)
+                                Spacer(minLength: 0)
+                            }
+                            .frame(width: 300, height: 284)
+                            .accessibilityHidden(true)
+                        }
+                    }
                     ForEach(visibleEpisodes) { episode in
                         EpisodeMediaCard(
-                            model: model, episode: episode, client: model.client, isPreparing: model.isStartingPlayback
+                            model: model, episode: episode, client: model.client(for: episode),
+                            isPreparing: model.isStartingPlayback
                         ) { fromBeginning in
                             model.play(episode, startFromBeginning: fromBeginning)
                         }
@@ -92,16 +110,24 @@ struct ShowEpisodesView: View {
         .onChange(of: savedSeasonNumbers) { _ in
             if model.showsDownloads || usesSavedEpisodes { loadSavedSeasons() }
         }
-        .task(id: "\(series.id):\(retry)") { await loadSeasons() }
-        .task(id: "\(series.id):\(selectedSeasonID ?? ""):\(model.playbackRevision):\(retry)") {
+        .task(id: "\(series.libraryID):\(retry)") {
+            let query = "\(series.libraryID):\(retry)"
+            guard loadedSeasonQuery != query else { return }
+            await loadSeasons()
+            if !Task.isCancelled && seasonError == nil { loadedSeasonQuery = query }
+        }
+        .task(id: "\(series.libraryID):\(selectedSeasonID ?? ""):\(model.playbackRevision):\(retry)") {
+            let query = "\(series.libraryID):\(selectedSeasonID ?? ""):\(model.playbackRevision):\(retry)"
+            guard loadedEpisodeQuery != query else { return }
             await loadEpisodes(reset: true)
+            if !Task.isCancelled && episodeError == nil && selectedSeasonID != nil { loadedEpisodeQuery = query }
         }
     }
 
     private func loadSavedSeasons() {
         usesSavedEpisodes = true
         seasons = Set(
-            model.downloads.episodes(seriesID: series.id, completedOnly: false).map { $0.parentIndexNumber ?? 0 }
+            model.downloads.episodes(seriesID: series.libraryID, completedOnly: false).map { $0.parentIndexNumber ?? 0 }
         )
         .sorted().map {
             SeasonOption(id: "offline:\($0)", name: $0 == 0 ? "Specials" : "Season \($0)", indexNumber: $0)
@@ -116,10 +142,10 @@ struct ShowEpisodesView: View {
             loadSavedSeasons()
             return
         }
-        guard let client = model.client else { return }
+        guard let client = model.client(for: series) else { return }
         isLoadingSeasons = true
         seasonError = nil
-        defer { if !Task.isCancelled { isLoadingSeasons = false } }
+        defer { isLoadingSeasons = false }
         do {
             let page = try await client.seasons(seriesID: series.id)
             try Task.checkCancellation()
@@ -131,7 +157,7 @@ struct ShowEpisodesView: View {
             }
         } catch {
             if !Task.isCancelled {
-                if !model.downloads.episodes(seriesID: series.id).isEmpty {
+                if !model.downloads.episodes(seriesID: series.libraryID).isEmpty {
                     loadSavedSeasons()
                 } else {
                     seasonError = "Seasons couldn’t be loaded."
@@ -142,32 +168,35 @@ struct ShowEpisodesView: View {
 
     private func loadEpisodes(reset: Bool) async {
         if model.showsDownloads || usesSavedEpisodes {
-            episodes = model.downloads.episodes(seriesID: series.id, completedOnly: false)
+            episodes = model.downloads.episodes(seriesID: series.libraryID, completedOnly: false)
                 .filter { ($0.parentIndexNumber ?? 0) == selectedSeason?.indexNumber }
             total = episodes.count
             nextOffset = total
             return
         }
-        guard let client = model.client, let seasonID = selectedSeasonID else { return }
+        guard let client = model.client(for: series), let seasonID = selectedSeasonID else { return }
         guard reset || !isLoadingEpisodes else { return }
         let requestGeneration = UUID()
         generation = requestGeneration
         isLoadingEpisodes = true
         episodeError = nil
-        if reset {
+        if reset && loadedSeasonID != seasonID {
             episodes = []
             total = 0
             nextOffset = 0
         }
         defer { if generation == requestGeneration { isLoadingEpisodes = false } }
         do {
-            let page = try await client.episodes(seriesID: series.id, seasonID: seasonID, startIndex: nextOffset)
+            let offset = reset ? 0 : nextOffset
+            let page = try await client.episodes(seriesID: series.id, seasonID: seasonID, startIndex: offset)
             try Task.checkCancellation()
             guard generation == requestGeneration, selectedSeasonID == seasonID else { return }
-            nextOffset = page.items.isEmpty ? page.totalCount : nextOffset + page.items.count
+            nextOffset = page.items.isEmpty ? page.totalCount : offset + page.items.count
+            if reset { episodes = [] }
             var ids = Set(episodes.map(\.id))
             episodes.append(contentsOf: page.items.filter { ids.insert($0.id).inserted })
             total = page.totalCount
+            loadedSeasonID = seasonID
         } catch {
             if !Task.isCancelled && generation == requestGeneration { episodeError = "Episodes couldn’t be loaded." }
         }

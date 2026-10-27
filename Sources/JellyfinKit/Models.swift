@@ -7,8 +7,12 @@ public struct JellyfinSession: Codable, Sendable {
 }
 
 public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
+    public var serverID: String?
+    public var libraryID: String { serverID.map { "\($0)|\(id)" } ?? id }
+    public var seriesLibraryID: String? { seriesID.map { id in serverID.map { "\($0)|\(id)" } ?? id } }
     public let id: String
     public let name: String
+    public var dateCreated: String?
     public let sortName: String?
     public let type: String?
     public let seriesName: String?
@@ -21,13 +25,14 @@ public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
     public let overview: String?
     public let officialRating: String?
     public let genres: [String]?
-    public let people: [VideoPerson]?
+    public var people: [VideoPerson]?
     public let productionLocations: [String]?
     public let premiereDate: String?
     public let studios: [VideoStudio]?
     public let mediaStreams: [VideoDetailStream]?
     public let mediaSources: [VideoDetailSource]?
     public let remoteTrailers: [RemoteTrailer]?
+    public var imageBlurHashes: [String: [String: String]]?
     public let imageTags: [String: String]?
     public let backdropImageTags: [String]?
     public let parentBackdropItemID: String?
@@ -69,8 +74,11 @@ public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case imageBlurHashes = "ImageBlurHashes"
+        case serverID = "TheatreServerID"
         case id = "Id"
         case name = "Name"
+        case dateCreated = "DateCreated"
         case sortName = "SortName"
         case type = "Type"
         case seriesName = "SeriesName"
@@ -99,9 +107,20 @@ public struct VideoItem: Codable, Identifiable, Sendable, Hashable {
         case parentLogoImageTag = "ParentLogoImageTag"
     }
 
+    public func onServer(_ serverID: String) -> VideoItem {
+        var item = self
+        item.serverID = serverID
+        item.people = people?.map { person in
+            var person = person
+            person.serverID = serverID
+            return person
+        }
+        return item
+    }
+
     // Synthesized equality compares the whole snapshot, so SwiftUI refreshes
     // metadata and watch status even when the movie's stable identity is unchanged.
-    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    public func hash(into hasher: inout Hasher) { hasher.combine(libraryID) }
 
     public var title: String {
         guard type == "Episode", let seriesName else { return name }
@@ -181,7 +200,7 @@ public enum JellyfinImageType: String, Sendable {
 }
 
 public struct VideoPage: Decodable, Sendable {
-    public let items: [VideoItem]
+    public var items: [VideoItem]
     public let totalCount: Int
     enum CodingKeys: String, CodingKey {
         case items = "Items"

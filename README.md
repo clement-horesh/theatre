@@ -16,7 +16,7 @@ Completed downloads play from account-scoped local files. Watch progress stays o
 
 ## Download
 
-Theatre 0.1.1 is packaged for **Apple Silicon Macs (M1 or later)**. [Download Theatre-0.1.1.dmg](https://github.com/clement-horesh/theatre/releases/download/v0.1.1/Theatre-0.1.1.dmg), drag Theatre into Applications, and connect to your own Jellyfin server. No server or media is included.
+Theatre 0.2.0 is packaged for **Apple Silicon Macs (M1 or later)**. [Download Theatre-0.2.0.dmg](https://github.com/clement-horesh/theatre/releases/download/v0.2.0/Theatre-0.2.0.dmg), drag Theatre into Applications, and connect to your own Jellyfin server. No server or media is included.
 
 This release is ad-hoc signed and **not notarized by Apple**. macOS may require approval through **System Settings → Privacy & Security → Open Anyway** after the first attempted launch. See [installation instructions](INSTALL.md), [release notes](RELEASE_NOTES.md), and [privacy information](PRIVACY.md).
 
@@ -46,10 +46,13 @@ The feed and update archives are signed with Ed25519. The public verification ke
 
 ## Use
 
-Enter your Jellyfin server address and account credentials. Theatre saves the server-issued token in Keychain; it never saves your password. **Theatre → Server → Sign Out** removes the saved session. HTTP and HTTPS servers and reverse-proxy base paths are supported. Enter the final server URL: authenticated requests reject redirects to another origin or scheme.
+Connect your first Jellyfin server through onboarding, then use **Theatre → Server → Add Server…** to connect more. Home, Continue, Recently Added, Movies, Shows, search, and downloads combine the connected servers. Movies and Shows include a server filter. Each server entry shows its address and username and has its own Sign Out action; signing out of every server returns to onboarding. Session tokens stay in Keychain; passwords are never saved.
+
+HTTP and HTTPS servers and reverse-proxy base paths are supported. Enter the final server URL: authenticated requests reject redirects to another origin or scheme. Jellyfin API, artwork, downloads, and HTTPS direct playback accept unverified certificates, including self-signed certificates; encryption does not verify the server’s identity. See [privacy information](PRIVACY.md).
 
 - **Home:** rotating recommendations, Continue cards that launch playback directly, and Recently Added posters grouped by show.
-- **Shows / Movies:** poster libraries, search, and detail pages with Jellyfin artwork and metadata.
+- **Shows / Movies:** poster libraries, search, and detail pages with Jellyfin artwork and metadata. Library and search results load additional pages automatically as you scroll.
+- **Loading:** Jellyfin BlurHashes provide blurred artwork previews without an extra image request, followed by a short fade to the full image. Neutral placeholders reserve space before metadata arrives or when a BlurHash is unavailable. Cached and already visible artwork appears immediately. Loaded tabs, details, seasons, cast pages, filters, and searches reuse session-only caches. Compressed artwork stays cached when decoded images are evicted. Use ⌘R for fresh library data; watch-progress changes invalidate browse data, while Resume and Recently Added always use live requests. Reduce Motion shows loaded images immediately.
 - **Trailers:** a card above Cast & Crew shows the first valid remote trailer supplied by Jellyfin, with its thumbnail and title. Select it to open a separate trailer window. YouTube uses its official embedded player; Open in Browser is available if the provider blocks playback. No additional API key is needed.
 - **Show details:** native season selector, episode cards, and a Start/Continue action resolved from resumable and next-up episodes.
 - **Discover:** related titles use Jellyfin's recommendations. Select a cast or crew portrait to browse that person's movies and shows available on your server; downloaded titles remain browsable by person offline.
@@ -64,7 +67,7 @@ Shortcuts: **Space** play/pause, **← / →** seek ten seconds, **F** video ful
 
 Use native keyboard focus to reach library cards, arrow keys to move between them, and Return to open or play the focused card. Escape returns from a detail or person page, or closes search. Focused cards have a visible accent outline. The recommendation carousel pauses rotation while it has keyboard focus and supports VoiceOver adjustment.
 
-**Theatre → Server → Information…** shows connection details. Jellyfin owns all artwork, metadata, media indexing, and watch history; no local media server is bundled with Theatre.
+**Theatre → Refresh Library** offers **Refresh All** and individual servers; **⌘R** refreshes all connected servers. Jellyfin owns all artwork, metadata, media indexing, and watch history; no local media server is bundled with Theatre.
 
 ## Offline downloads
 

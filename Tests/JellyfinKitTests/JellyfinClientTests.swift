@@ -130,6 +130,23 @@ final class JellyfinClientTests: XCTestCase {
         XCTAssertEqual(result.items[0].title, "A Show · S1 E2 — Pilot")
     }
 
+    func testSearchAvoidsPlaceholderPostFilteringAcrossLibrarySections() async throws {
+        for itemTypes in [[], ["Movie"], ["Series"]] {
+            StubProtocol.handler = { request in
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                XCTAssertEqual(query.first { $0.name == "searchTerm" }?.value, "spider")
+                XCTAssertEqual(
+                    query.first { $0.name == "includeItemTypes" }?.value, itemTypes.isEmpty ? nil : itemTypes[0])
+                XCTAssertEqual(query.first { $0.name == "excludeLocationTypes" }?.value, "Virtual")
+                // This flag forces Jellyfin's in-memory filtering, which ignores SearchTerm.
+                XCTAssertNil(query.first { $0.name == "isPlaceHolder" })
+                return (200, #"{"Items":[{"Id":"spider","Name":"Spider-Man","Type":"Movie"}],"TotalRecordCount":1}"#)
+            }
+            let page = try await client().videos(search: "spider", itemTypes: itemTypes)
+            XCTAssertEqual(page.items.map(\.name), ["Spider-Man"])
+        }
+    }
+
     func testMovieShowAndEpisodeFiltersUseJellyfinItemTypes() async throws {
         for (types, parent) in [(["Movie"], nil), (["Series"], nil), (["Episode"], "series-1")] {
             StubProtocol.handler = { request in
@@ -722,6 +739,30 @@ final class JellyfinClientTests: XCTestCase {
             "https://example.com/jellyfin")
     }
 
+    func testRecentlyAddedExcludesVirtualEpisodesBeforeApplyingTheTitleLimit() async throws {
+        let virtualEpisodes: [[String: Any]] = (0..<30).map {
+            ["Id": "virtual-\($0)", "Name": "Unaired episode", "Type": "Episode", "SeriesId": "show-\($0)"]
+        }
+        let movie: [String: Any] = [
+            "Id": "movie", "Name": "Newest Movie", "Type": "Movie", "DateCreated": "2026-10-27T23:03:05.0521404Z",
+        ]
+        StubProtocol.handler = { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let items: [[String: Any]]
+            if let ids = query.first(where: { $0.name == "ids" })?.value {
+                items = ids.split(separator: ",").map { ["Id": String($0), "Name": "Show", "Type": "Series"] }
+            } else {
+                let excludesVirtual = query.contains { $0.name == "excludeLocationTypes" && $0.value == "Virtual" }
+                items = excludesVirtual ? [movie] : virtualEpisodes + [movie]
+            }
+            let body = try JSONSerialization.data(withJSONObject: ["Items": items, "TotalRecordCount": items.count])
+            return (200, String(decoding: body, as: UTF8.self))
+        }
+        let titles = try await client().recentlyAddedTitles()
+        XCTAssertEqual(titles.map(\.id), ["movie"])
+        XCTAssertEqual(titles.first?.dateCreated, "2026-10-27T23:03:05.0521404Z")
+    }
+
     func testRecentlyAddedGroupsEpisodesIntoShowsWithSeriesArtworkAndSynopsis() async throws {
         StubProtocol.handler = { request in
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
@@ -801,7 +842,7 @@ final class JellyfinClientTests: XCTestCase {
     }
 }
 
-private final class StubProtocol: URLProtocol, @unchecked Sendable {
+final class StubProtocol: URLProtocol, @unchecked Sendable {
     static var handler: ((URLRequest) throws -> (Int, String))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

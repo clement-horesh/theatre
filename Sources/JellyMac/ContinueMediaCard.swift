@@ -15,7 +15,7 @@ struct ContinueMediaCard: View {
             ZStack(alignment: .bottomLeading) {
                 JellyfinArtwork(
                     request: try? client?.imageRequest(for: video, type: .backdrop, maxWidth: 1000),
-                    progressBlurHeight: showsProgress ? 84 : 0
+                    blurHashes: video.imageBlurHashes, progressBlurHeight: showsProgress ? 84 : 0
                 ) {
                     Color(white: 0.1)
                 }

@@ -49,7 +49,7 @@ struct LibraryBrowseView: View {
                     || (model.libraryFilters.watchStatus == .resumable
                         && (video.isInProgress
                             || (video.type == "Series"
-                                && model.downloads.episodes(seriesID: video.id).contains(where: \.isInProgress)))))
+                                && model.downloads.episodes(seriesID: video.libraryID).contains(where: \.isInProgress)))))
         }
     }
     private var groups: [String: [VideoItem]] { Dictionary(grouping: videos, by: \.libraryLetter) }
@@ -83,22 +83,37 @@ struct LibraryBrowseView: View {
                             ForEach(sections, id: \.self) { section in
                                 VStack(alignment: .leading, spacing: 16) {
                                     if !section.isEmpty { Text(section).font(.title2.weight(.semibold)) }
-                                    if layout == .grid {
+                                    if videos.isEmpty
+                                        && (downloaded ? model.downloads.isLoadingCatalog : model.isLoading)
+                                    {
+                                        if layout == .grid {
+                                            PosterSkeletonGrid()
+                                        } else {
+                                            VStack(spacing: 20) {
+                                                ForEach(0..<8) { _ in
+                                                    HStack(spacing: 16) {
+                                                        LoadingPlaceholder().frame(width: 48, height: 72)
+                                                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                                                        VStack(alignment: .leading, spacing: 10) {
+                                                            LoadingPlaceholder().frame(width: 180, height: 16)
+                                                            LoadingPlaceholder().frame(width: 110, height: 12)
+                                                        }
+                                                        Spacer()
+                                                    }
+                                                }
+                                            }
+                                            .accessibilityElement(children: .ignore).accessibilityLabel(
+                                                "Loading titles")
+                                        }
+                                    } else if layout == .grid {
                                         posterGrid(sectionVideos(section))
                                     } else {
                                         alphabeticalList(sectionVideos(section), section: section)
                                     }
-                                    if downloaded, sectionVideos(section).isEmpty {
+                                    if downloaded, !model.downloads.isLoadingCatalog, sectionVideos(section).isEmpty {
                                         Text("No downloaded \(section.lowercased()).").foregroundStyle(.secondary)
                                     }
                                 }
-                            }
-                            if !downloaded && model.canLoadMore {
-                                Button("Load more") { Task { await model.loadVideos(reset: false) } }
-                                    .frame(maxWidth: .infinity)
-                            }
-                            if !downloaded && model.isLoading && !model.videos.isEmpty {
-                                ProgressView().frame(maxWidth: .infinity)
                             }
                             if !downloaded, let error = model.errorMessage {
                                 LibraryConnectionIssue(model: model, message: error)
@@ -127,6 +142,7 @@ struct LibraryBrowseView: View {
                     }
                 }
                 .onChange(of: model.librarySection) { _ in resetScroll(proxy) }
+                .onChange(of: model.serverFilter) { _ in resetScroll(proxy) }
                 .onChange(of: model.search) { _ in resetScroll(proxy) }
                 .onChange(of: model.libraryFilters) { _ in resetScroll(proxy) }
                 .onChange(of: downloaded) { _ in
@@ -137,7 +153,8 @@ struct LibraryBrowseView: View {
                 .onChange(of: layout) { _ in resetScroll(proxy) }
             }
         }
-        .task(id: "\(model.librarySection.rawValue):\(downloaded)") {
+        .task(id: "\(model.librarySection.rawValue):\(downloaded):\(model.libraryIdentity):\(model.serverFilter ?? "")")
+        {
             if downloaded {
                 await model.downloads.waitUntilReady()
                 await model.downloads.checkLocalFiles()
@@ -153,10 +170,12 @@ struct LibraryBrowseView: View {
             columns: [GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 24, alignment: .top)],
             alignment: .leading, spacing: 26
         ) {
-            ForEach(videos) { video in
+            ForEach(videos, id: \.libraryID) { video in
                 NavigationLink(value: video) {
                     VStack(alignment: .leading, spacing: 6) {
-                        MoviePoster(video: video, client: model.client, progressVideo: model.progressVideo(for: video))
+                        MoviePoster(
+                            video: video, client: model.client(for: video),
+                            progressVideo: model.progressVideo(for: video))
                         if downloaded { DownloadStatus(downloads: model.downloads, video: video) }
                     }
                 }
@@ -164,10 +183,13 @@ struct LibraryBrowseView: View {
                 .contextMenu { WatchStatusAction(video: video, model: model) }
                 .accessibilityLabel("Details for \(video.title)")
                 .accessibilityValue(model.progressVideo(for: video).accessibleWatchStatus)
-                .libraryCardFocus(video.id, focus: $focusedCard, items: videos.map(\.id), columns: gridColumns) {
+                .libraryCardFocus(
+                    video.libraryID, focus: $focusedCard, items: videos.map(\.libraryID), columns: gridColumns
+                ) {
                     navigation.video(video)
                 }
             }
+            if !downloaded { LibraryPagination(model: model) }
         }
         .focusSection()
         .background {
@@ -183,15 +205,19 @@ struct LibraryBrowseView: View {
         return LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
             ForEach(alphabet.filter { grouped[$0] != nil }, id: \.self) { letter in
                 Section {
-                    ForEach(grouped[letter] ?? []) { video in
+                    ForEach(grouped[letter] ?? [], id: \.libraryID) { video in
                         NavigationLink(value: video) {
                             alphabeticalRow(video)
                         }
                         .buttonStyle(.plain)
                         .onHover { hovering in
-                            if hovering { hoveredRow = video.id } else if hoveredRow == video.id { hoveredRow = nil }
+                            if hovering {
+                                hoveredRow = video.libraryID
+                            } else if hoveredRow == video.libraryID {
+                                hoveredRow = nil
+                            }
                         }
-                        .libraryCardFocus(video.id, focus: $focusedCard, items: videos.map(\.id)) {
+                        .libraryCardFocus(video.libraryID, focus: $focusedCard, items: videos.map(\.libraryID)) {
                             navigation.video(video)
                         }
                         .accessibilityLabel("Details for \(video.title)")
@@ -206,13 +232,15 @@ struct LibraryBrowseView: View {
                         .id("\(section):\(letter)")
                 }
             }
+            if !downloaded { LibraryPagination(model: model) }
         }
     }
 
     private func alphabeticalRow(_ video: VideoItem) -> some View {
         HStack(spacing: 16) {
             JellyfinArtwork(
-                request: try? model.client?.imageRequest(for: video, type: .primary, maxWidth: 120)
+                request: try? model.client(for: video)?.imageRequest(for: video, type: .primary, maxWidth: 120),
+                blurHashes: video.imageBlurHashes
             ) {
                 Color.secondary.opacity(0.12).overlay { Image(systemName: "film") }
             }
@@ -230,9 +258,9 @@ struct LibraryBrowseView: View {
         .padding(.vertical, 10).contentShape(Rectangle())
         .background {
             RoundedRectangle(cornerRadius: 8)
-                .fill(.white.opacity(hoveredRow == video.id ? 0.07 : 0))
+                .fill(.white.opacity(hoveredRow == video.libraryID ? 0.07 : 0))
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hoveredRow == video.id)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hoveredRow == video.libraryID)
     }
 
     private var letterIndex: some View {
@@ -257,6 +285,14 @@ struct LibraryBrowseView: View {
 
     private var filtersMenu: some View {
         Menu {
+            if !downloaded, model.servers.count > 1 {
+                Picker("Server", selection: $model.serverFilter) {
+                    Text("All Servers").tag(nil as String?)
+                    ForEach(model.servers) { server in Text(server.label).tag(Optional(server.id)) }
+                }
+                .accessibilityIdentifier("serverFilter")
+                Divider()
+            }
             if downloaded {
                 Picker("Content", selection: $downloadType) {
                     ForEach(["All", "Movies", "Shows"], id: \.self) { Text($0).tag($0) }
@@ -296,15 +332,18 @@ struct LibraryBrowseView: View {
             Divider()
             Button("Clear Filters") {
                 model.libraryFilters = VideoFilters()
+                if !downloaded { model.serverFilter = nil }
                 downloadType = "All"
             }
-            .disabled(model.libraryFilters.isEmpty && downloadType == "All")
+            .disabled(
+                model.libraryFilters.isEmpty && downloadType == "All" && (downloaded || model.serverFilter == nil))
         } label: {
             Label(
-                model.libraryFilters.isEmpty && downloadType == "All" ? "Filters" : "Filters •",
+                model.libraryFilters.isEmpty && downloadType == "All" && (downloaded || model.serverFilter == nil)
+                    ? "Filters" : "Filters •",
                 systemImage: "line.3.horizontal.decrease")
         }
-        .fixedSize().help("Filter by watch status, genre, or year")
+        .fixedSize().help("Filter by server, watch status, genre, or year")
     }
 
     private func resetScroll(_ proxy: ScrollViewProxy) {
@@ -314,16 +353,29 @@ struct LibraryBrowseView: View {
     }
 
     private func loadFilterOptions() async {
-        filterOptions = nil
         filterError = nil
         let section = model.librarySection
         do {
-            let options = try await model.client?.videoFilterOptions(itemTypes: section.itemTypes)
+            let options = try await model.videoFilterOptions()
             guard !Task.isCancelled, model.librarySection == section else { return }
             filterOptions = options
         } catch {
             guard !Task.isCancelled, model.librarySection == section else { return }
             filterError = "Genre and year filters couldn’t be loaded."
+        }
+    }
+}
+
+struct LibraryPagination: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        // Keep the task mounted while its page is loading.
+        if !model.videos.isEmpty, model.errorMessage == nil, model.canLoadMore || model.isLoading {
+            ProgressView()
+                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                .accessibilityLabel("Loading more titles")
+                .task(id: model.nextVideoOffset) { await model.loadVideos(reset: false) }
         }
     }
 }

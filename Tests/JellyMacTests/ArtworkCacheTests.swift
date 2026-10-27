@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import XCTest
 
 @testable import JellyMac
@@ -6,6 +6,30 @@ import XCTest
 final class ArtworkCacheTests: XCTestCase {
     private let pixel = Data(
         base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=")!
+
+    @MainActor
+    func testEvictingDecodedArtworkDoesNotDownloadItAgainAndAccountsStaySeparate() async throws {
+        var requests = 0
+        let transport = TestURLProtocol.session { [pixel] _ in
+            requests += 1
+            return .init(data: pixel)
+        }
+        defer { transport.invalidateAndCancel() }
+        let images = NSCache<NSString, NSImage>()
+        let cache = ArtworkCache(session: transport, images: images)
+        var request = URLRequest(url: URL(string: "https://theatre.test/poster")!)
+        request.setValue("first-account", forHTTPHeaderField: "Authorization")
+        _ = try await cache.image(for: request)
+        images.removeAllObjects()
+        XCTAssertNotNil(cache.cachedImage(for: request), "Compressed artwork must survive decoded-image eviction")
+        _ = try await cache.image(for: request)
+        XCTAssertEqual(requests, 1)
+        request.setValue("second-account", forHTTPHeaderField: "Authorization")
+        XCTAssertNil(cache.cachedImage(for: request))
+        cache.clear()
+        request.setValue("first-account", forHTTPHeaderField: "Authorization")
+        XCTAssertNil(cache.cachedImage(for: request))
+    }
 
     @MainActor
     func testDownloadedArtworkLoadsWithoutContactingTheServer() async throws {
@@ -25,6 +49,14 @@ final class ArtworkCacheTests: XCTestCase {
         cache.setLocalArtwork([ArtworkCache.localKey(small): file])
         let image = try await cache.image(for: large)
         XCTAssertNotNil(image)
+        XCTAssertTrue(
+            image === cache.cachedImage(for: small), "Different display sizes should reuse the downloaded image")
+        XCTAssertTrue(image === cache.cachedImage(for: large), "Redrawing must not reload the artwork file")
+        cache.setLocalArtwork([ArtworkCache.localKey(small): file])
+        XCTAssertFalse(
+            image === cache.cachedImage(for: large), "A refreshed catalog can replace an image at the same file URL")
+        cache.setLocalArtwork([:])
+        XCTAssertNil(cache.cachedImage(for: large), "Removed offline artwork must no longer be returned")
     }
 
     @MainActor
@@ -39,18 +71,27 @@ final class ArtworkCacheTests: XCTestCase {
         var request = URLRequest(url: URL(string: "https://theatre.test/image")!)
         request.setValue("first-account", forHTTPHeaderField: "Authorization")
         let initial = request
+        XCTAssertNil(cache.cachedImage(for: request))
         async let first = cache.image(for: initial)
         async let second = cache.image(for: initial)
         let images = try await (first, second)
         XCTAssertNotNil(images.0)
         XCTAssertNotNil(images.1)
         XCTAssertEqual(requests, 1)
+        XCTAssertTrue(cache.cachedImage(for: request) === images.0)
         _ = try await cache.image(for: request)
         XCTAssertEqual(requests, 1)
         request.setValue("second-account", forHTTPHeaderField: "Authorization")
+        XCTAssertNil(cache.cachedImage(for: request))
         _ = try await cache.image(for: request)
         XCTAssertEqual(requests, 2)
+        let remote = cache.cachedImage(for: request)
+        cache.setLocalArtwork(["https://theatre.test/unrelated": URL(fileURLWithPath: "/unused-cover")])
+        cache.setLocalArtwork([:])
+        XCTAssertTrue(
+            remote === cache.cachedImage(for: request), "Offline catalog changes must keep the network cache warm")
         cache.clear()
+        XCTAssertNil(cache.cachedImage(for: request))
         _ = try await cache.image(for: request)
         XCTAssertEqual(requests, 3)
     }

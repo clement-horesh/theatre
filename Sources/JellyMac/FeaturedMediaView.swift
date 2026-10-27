@@ -22,7 +22,10 @@ struct FeaturedMediaView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomLeading) {
-                JellyfinArtwork(request: backdropRequest, onImageLoaded: { onColor(ArtworkColor.dominant(in: $0)) }) {
+                JellyfinArtwork(
+                    request: backdropRequest, blurHashes: video.imageBlurHashes,
+                    onImageLoaded: { onColor(ArtworkColor.dominant(in: $0)) }
+                ) {
                     Color(white: 0.08)
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height).clipped()

@@ -63,6 +63,12 @@ final class DownloadManager: ObservableObject {
         assets.invalidateAndCancel()
     }
 
+    func sibling() -> DownloadManager {
+        DownloadManager(
+            root: root, configuration: configuration, availableSpace: availableSpace,
+            maximumConcurrentDownloads: maximumConcurrentDownloads)
+    }
+
     static func accountKey(_ client: JellyfinClient) -> String {
         digest("\(client.serverURL.absoluteString)|\(client.session?.userID ?? "")")
     }
@@ -106,7 +112,7 @@ final class DownloadManager: ObservableObject {
         syncError = nil
         freeBytes = nil
         isShuttingDown = false
-        ArtworkCache.shared.setLocalArtwork([:])
+        if let oldDirectory { ArtworkCache.shared.setLocalArtwork([:], account: oldDirectory.lastPathComponent) }
         isLoadingCatalog = next != nil
         let files = files
         catalogTask = Task { [weak self] in
@@ -136,6 +142,10 @@ final class DownloadManager: ObservableObject {
                 guard self.generation == current, !Task.isCancelled else { return }
                 self.records = loaded.map { record in
                     var record = record
+                    if let client {
+                        record.video = record.video.onServer(client.serverID)
+                        record.series = record.series?.onServer(client.serverID)
+                    }
                     if record.isActive || record.state == .pausing { record.state = .paused }
                     return record
                 }
@@ -274,7 +284,7 @@ final class DownloadManager: ObservableObject {
             }
             return
         }
-        guard catalogReadable, client != nil, directory != nil, video.type == "Movie" || video.type == "Episode" else {
+        guard catalogReadable, let client, directory != nil, video.type == "Movie" || video.type == "Episode" else {
             return
         }
         if let existing = record(for: video),
@@ -287,7 +297,8 @@ final class DownloadManager: ObservableObject {
         let id = existing?.id ?? UUID()
         if existing == nil {
             let series = video.seriesID.map {
-                cachedVideo(id: $0) ?? VideoItem(id: $0, name: video.seriesName ?? "Show", type: "Series")
+                cachedVideo(id: $0)
+                    ?? VideoItem(id: $0, name: video.seriesName ?? "Show", type: "Series").onServer(client.serverID)
             }
             records.append(DownloadRecord(id: id, video: video, series: series))
         }
@@ -745,7 +756,7 @@ final class DownloadManager: ObservableObject {
                 if let url = fileURL(record, name: name) { files[key] = url }
             }
         }
-        ArtworkCache.shared.setLocalArtwork(files)
+        ArtworkCache.shared.setLocalArtwork(files, account: directory?.lastPathComponent ?? "")
     }
     private func rebuildCatalog() {
         recordsByVideo = [:]

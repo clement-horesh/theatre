@@ -49,11 +49,6 @@ struct JellyMacApp: App {
             PlaybackSettingsView(preferences: model.preferences, downloads: model.downloads, updater: updater)
                 .preferredColorScheme(.dark)
         }
-        Window("Information", id: "jellyfin-information") {
-            JellyfinInformationView(model: model)
-                .preferredColorScheme(.dark)
-        }
-        .windowResizability(.contentSize)
         WindowGroup("Trailer", for: TrailerPresentation.self) { $trailer in
             if let trailer { TrailerView(trailer: trailer).preferredColorScheme(.dark) }
         }
@@ -62,25 +57,30 @@ struct JellyMacApp: App {
 }
 
 private struct TheatreCommands: Commands {
-    @Environment(\.openWindow) private var openWindow
     @ObservedObject var model: AppModel
     @ObservedObject var updater: AppUpdater
 
     var body: some Commands {
         CommandGroup(after: .appInfo) {
             Divider()
-            Button("Refresh Library") {
-                Task { await model.loadVideos() }
+            Menu("Refresh Library") {
+                Button("Refresh All") { Task { await model.refreshLibrary() } }
+                    .keyboardShortcut("r", modifiers: .command)
+                Divider()
+                ForEach(model.servers) { server in
+                    Button(server.label) { Task { await model.refreshLibrary(serverID: server.id) } }
+                }
             }
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(model.client == nil || model.isLoading)
+            .disabled(model.servers.isEmpty || model.isLoading)
             Menu("Server") {
-                Button("Information…") {
-                    openWindow(id: "jellyfin-information")
+                ForEach(model.servers) { server in
+                    Section(server.label) {
+                        Button("Sign Out") { model.signOut(serverID: server.id) }
+                    }
                 }
                 Divider()
-                Button("Sign Out") { model.signOut() }
-                    .disabled(model.client == nil)
+                Button("Add Server…") { model.addServer() }
+                    .disabled(model.servers.isEmpty || model.isConnecting || model.showsAddServer)
             }
             Divider()
             UpdateMenu(updater: updater)

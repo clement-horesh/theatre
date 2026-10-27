@@ -50,6 +50,7 @@ final class PlaybackController: ObservableObject {
     private var lastVideoSize = CGSize.zero
     private var pollingTask: Task<Void, Never>?
     private var endObservation: NSObjectProtocol?
+    private var httpStream: HTTPVideoStream?
     private var pendingSubtitles: [PlaybackSubtitle] = []
     private var reportedEnd = false
     private var generation = UUID()
@@ -136,7 +137,13 @@ final class PlaybackController: ObservableObject {
         if stream.resumePositionSeconds.isFinite, stream.resumePositionSeconds > 0 {
             pendingResume = stream.resumePositionSeconds
         }
-        engine.media = VLCMedia(url: stream.url)
+        if stream.url.scheme == "https", stream.method == "DirectPlay" {
+            let input = HTTPVideoStream(url: stream.url)
+            httpStream = input
+            engine.media = VLCMedia(stream: input)
+        } else {
+            engine.media = VLCMedia(url: stream.url)
+        }
         engine.play()
         engine.rate = Float(rate)
         startPolling()
@@ -163,7 +170,9 @@ final class PlaybackController: ObservableObject {
         generation = UUID()
         pollingTask?.cancel()
         pollingTask = nil
+        httpStream?.close()
         engine.stop()
+        httpStream = nil
         engine.media = nil
         if stopApple { applePlayback.stop() } else { applePlayback.player.pause() }
         if stopApple {

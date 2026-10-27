@@ -6,10 +6,10 @@ enum FeaturedRecommendations {
         let recentTitles = Array(recent.filter { $0.type != "Episode" }.prefix(10))
         let movies = continuing.filter { $0.type == "Movie" && $0.isInProgress }.prefix(5)
         // Prefer the latest playback information when a movie appears in both sources.
-        let resumeByID = Dictionary(movies.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let resumeByID = Dictionary(movies.map { ($0.libraryID, $0) }, uniquingKeysWith: { first, _ in first })
         var seen = Set<String>()
-        return (recentTitles.map { resumeByID[$0.id] ?? $0 } + movies)
-            .filter { seen.insert($0.id).inserted }
+        return (recentTitles.map { resumeByID[$0.libraryID] ?? $0 } + movies)
+            .filter { seen.insert($0.libraryID).inserted }
     }
 
     static func choose<R: RandomNumberGenerator>(

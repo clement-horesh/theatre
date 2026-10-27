@@ -14,13 +14,13 @@ struct MovieDetailView: View {
 
     private var video: VideoItem {
         if model.showsDownloads {
-            return model.downloads.cachedVideo(id: initialVideo.id) ?? loadedVideo ?? initialVideo
+            return model.downloads.cachedVideo(id: initialVideo.libraryID) ?? loadedVideo ?? initialVideo
         }
         return loadedVideo ?? initialVideo
     }
     private var playbackSelection: ShowPlaybackSelection? {
         model.showsDownloads
-            ? ShowPlaybackSelection(episodes: model.downloads.episodes(seriesID: video.id)) : showPlayback
+            ? ShowPlaybackSelection(episodes: model.downloads.episodes(seriesID: video.libraryID)) : showPlayback
     }
     private let pageColor = Color(white: 0.09)
 
@@ -30,7 +30,7 @@ struct MovieDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         MovieDetailHero(
-                            video: video, client: model.client, isPreparing: model.isStartingPlayback,
+                            video: video, client: model.client(for: video), isPreparing: model.isStartingPlayback,
                             pageColor: pageColor,
                             playTitle: video.type == "Series" ? (playbackSelection?.title ?? "Start") : nil,
                             canPlay: video.type == "Series"
@@ -59,11 +59,12 @@ struct MovieDetailView: View {
                                     .font(.callout).foregroundStyle(.secondary)
                             }
                             if video.type == "Series" { ShowEpisodesView(model: model, series: video) }
-                            MovieTrailerSection(video: video, client: model.client) { trailer in
+                            MovieTrailerSection(video: video, client: model.client(for: video)) { trailer in
                                 if model.playback.isPlaying { model.togglePlayback() }
                                 openWindow(value: trailer)
                             }
-                            MovieCastSection(video: video, client: model.client, width: geometry.size.width - 80)
+                            MovieCastSection(
+                                video: video, client: model.client(for: video), width: geometry.size.width - 80)
                             if !model.showsDownloads && !relatedTitles.isEmpty {
                                 RelatedTitlesSection(model: model, titles: relatedTitles)
                             }
@@ -76,31 +77,31 @@ struct MovieDetailView: View {
                 }
                 .background(pageColor)
                 .overlay(alignment: .topTrailing) {
-                    if isLoading { ProgressView().controlSize(.small).padding(20) }
+                    if isLoading && loadedVideo == nil { ProgressView().controlSize(.small).padding(20) }
                 }
             }
         }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
         .navigationTitle(video.name)
-        .task(id: "\(initialVideo.id):\(model.playbackRevision)") {
+        .task(id: "\(initialVideo.libraryID):\(model.playbackRevision)") {
             if model.showsDownloads {
-                loadedVideo = model.downloads.cachedVideo(id: initialVideo.id)
-                showPlayback = ShowPlaybackSelection(episodes: model.downloads.episodes(seriesID: initialVideo.id))
+                loadedVideo = model.downloads.cachedVideo(id: initialVideo.libraryID)
+                showPlayback = ShowPlaybackSelection(
+                    episodes: model.downloads.episodes(seriesID: initialVideo.libraryID))
                 return
             }
-            guard let client = model.client else { return }
+            guard let client = model.client(for: initialVideo) else { return }
             isLoading = true
             async let related = try? client.relatedTitles(itemID: initialVideo.id)
             errorMessage = nil
-            showPlayback = nil
             do {
                 let result = try await client.item(id: initialVideo.id)
                 try Task.checkCancellation()
                 loadedVideo = result
             } catch {
                 if !Task.isCancelled {
-                    loadedVideo = model.downloads.cachedVideo(id: initialVideo.id)
+                    loadedVideo = model.downloads.cachedVideo(id: initialVideo.libraryID) ?? loadedVideo
                     if loadedVideo == nil {
                         errorMessage = "Some title details could not be loaded. You can still select a video to play."
                     }
@@ -114,7 +115,7 @@ struct MovieDetailView: View {
                 } catch {
                     if !Task.isCancelled {
                         showPlayback = ShowPlaybackSelection(
-                            episodes: model.downloads.episodes(seriesID: initialVideo.id))
+                            episodes: model.downloads.episodes(seriesID: initialVideo.libraryID))
                         if showPlayback == nil {
                             errorMessage = "The next episode couldn’t be loaded. You can still select an episode below."
                         }
@@ -123,7 +124,7 @@ struct MovieDetailView: View {
             }
             let recommendations = await related
             if !Task.isCancelled {
-                relatedTitles = recommendations ?? []
+                relatedTitles = recommendations ?? relatedTitles
                 isLoading = false
             }
         }

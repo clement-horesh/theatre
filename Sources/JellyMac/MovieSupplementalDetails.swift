@@ -17,7 +17,10 @@ struct MovieCastSection: View {
                         ForEach(people) { person in
                             NavigationLink(value: person) {
                                 VStack(spacing: 8) {
-                                    JellyfinArtwork(request: try? client?.imageRequest(for: person)) {
+                                    JellyfinArtwork(
+                                        request: try? client?.imageRequest(for: person),
+                                        blurHashes: person.imageBlurHashes
+                                    ) {
                                         ZStack {
                                             Color(white: 0.17)
                                             Image(systemName: "person.fill").font(.system(size: 42)).foregroundStyle(

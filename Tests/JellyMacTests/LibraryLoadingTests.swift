@@ -19,6 +19,146 @@ final class LibraryLoadingTests: XCTestCase {
     }
 
     @MainActor
+    func testReturningToTabsRestoresLoadedPagesAndPaginationButRefreshStillFetches() async throws {
+        var requests: [String] = []
+        let transport = TestURLProtocol.session { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let type = query.first { $0.name == "includeItemTypes" }!.value!
+            let offset = query.first { $0.name == "startIndex" }!.value!
+            requests.append("\(type):\(offset)")
+            return .json("{\"Items\":[{\"Id\":\"\(type)-\(offset)\",\"Name\":\"Title\"}],\"TotalRecordCount\":3}")
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        await model.loadLibraryPage()
+        await model.loadVideos(reset: false)
+        model.librarySection = .shows
+        await model.loadLibraryPage()
+        model.librarySection = .movies
+        await model.loadLibraryPage()
+        XCTAssertEqual(model.videos.map(\.id), ["Movie-0", "Movie-1"])
+        XCTAssertEqual(model.totalCount, 3)
+        XCTAssertTrue(model.canLoadMore)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertEqual(requests, ["Movie:0", "Movie:1", "Series:0"])
+        await model.loadVideos(reset: false)
+        XCTAssertEqual(requests.last, "Movie:2")
+        XCTAssertFalse(model.canLoadMore)
+        await model.loadVideos()
+        XCTAssertEqual(requests.last, "Movie:0")
+        XCTAssertEqual(requests.count, 5)
+        XCTAssertEqual(model.videos.map(\.id), ["Movie-0"])
+    }
+
+    @MainActor
+    func testReturningHomeKeepsItsFeedsAndDoesNotRepeatRequests() async throws {
+        var requests = 0
+        let transport = TestURLProtocol.session { _ in
+            requests += 1
+            return .json(#"{"Items":[{"Id":"title","Name":"Title","Type":"Movie"}],"TotalRecordCount":1}"#)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        model.librarySection = .home
+        await model.loadLibraryPage()
+        XCTAssertEqual(requests, 3)
+        let revision = model.homeRecommendationRevision
+        model.librarySection = .movies
+        await model.loadLibraryPage()
+        XCTAssertEqual(model.recentlyAddedVideos.map(\.id), ["title"])
+        model.librarySection = .home
+        await model.loadLibraryPage()
+        model.showsDownloads = true
+        await model.loadLibraryPage()
+        model.showsDownloads = false
+        await model.loadLibraryPage()
+        XCTAssertEqual(requests, 4)
+        XCTAssertEqual(model.resumeVideos.map(\.id), ["title"])
+        XCTAssertEqual(model.recentContinueMovies.map(\.id), ["title"])
+        XCTAssertEqual(model.homeRecommendationRevision, revision)
+        XCTAssertTrue(model.videos.isEmpty)
+    }
+
+    @MainActor
+    func testCachedPageRejectsAnOlderResponseAfterQuickTabSwitching() async throws {
+        let requested = expectation(description: "Shows request started")
+        let transport = TestURLProtocol.session { request in
+            if request.url!.query!.contains("Series") {
+                requested.fulfill()
+                return .json(#"{"Items":[{"Id":"show","Name":"Show"}],"TotalRecordCount":1}"#, delay: 0.1)
+            }
+            return .json(#"{"Items":[{"Id":"movie","Name":"Movie"}],"TotalRecordCount":1}"#)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        await model.loadLibraryPage()
+        model.librarySection = .shows
+        let load = Task { await model.loadLibraryPage() }
+        await fulfillment(of: [requested], timeout: 2)
+        model.librarySection = .movies
+        await model.loadLibraryPage()
+        await load.value
+        XCTAssertEqual(model.videos.map(\.id), ["movie"])
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isLoading)
+    }
+
+    @MainActor
+    func testFailedPagesAreRetriedAndFiltersNeverReuseUnfilteredResults() async throws {
+        var requests = 0
+        let transport = TestURLProtocol.session { _ in
+            requests += 1
+            if requests == 1 { return .json("{}", status: 503) }
+            return .json(#"{"Items":[],"TotalRecordCount":0}"#)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        await model.loadLibraryPage()
+        XCTAssertNotNil(model.errorMessage)
+        await model.loadLibraryPage()
+        XCTAssertNil(model.errorMessage)
+        await model.loadLibraryPage()
+        XCTAssertEqual(requests, 2, "Successful empty libraries are cached too")
+        model.libraryFilters.genre = "Drama"
+        await model.loadLibraryPage()
+        XCTAssertEqual(requests, 3)
+        model.search = "Title"
+        await model.loadLibraryPage()
+        XCTAssertEqual(requests, 4)
+    }
+
+    @MainActor
+    func testWatchStatusChangesInvalidatePreviouslyLoadedTabs() async throws {
+        var watched = false
+        var catalogRequests = 0
+        let transport = TestURLProtocol.session { request in
+            if request.url!.path.contains("UserPlayedItems") {
+                watched = true
+                return .json("{}")
+            }
+            if request.url!.path.contains("Resume") {
+                return .json(#"{"Items":[],"TotalRecordCount":0}"#)
+            }
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            if !query.contains(where: { $0.name == "ids" }) { catalogRequests += 1 }
+            return .json(
+                "{\"Items\":[{\"Id\":\"movie\",\"Name\":\"Movie\",\"Type\":\"Movie\",\"UserData\":{\"Played\":\(watched)}}],\"TotalRecordCount\":1}"
+            )
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        await model.loadLibraryPage()
+        let movie = try XCTUnwrap(model.videos.first)
+        model.librarySection = .shows
+        await model.loadLibraryPage()
+        await model.toggleWatched(movie)
+        model.librarySection = .movies
+        await model.loadLibraryPage()
+        XCTAssertEqual(catalogRequests, 3)
+        XCTAssertTrue(try XCTUnwrap(model.videos.first).userData?.played == true)
+    }
+
+    @MainActor
     func testPermissionFailureKeepsSavedSession() async throws {
         let transport = TestURLProtocol.session { _ in .json("{}", status: 403) }
         defer { transport.invalidateAndCancel() }
@@ -63,6 +203,119 @@ final class LibraryLoadingTests: XCTestCase {
         XCTAssertTrue(model.videos.isEmpty)
         XCTAssertEqual(model.totalCount, 0)
         XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testPaginationCannotUseThePreviousSearchOffsetDuringDebounce() async throws {
+        var requests: [String] = []
+        let transport = TestURLProtocol.session { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let search = query.first { $0.name == "searchTerm" }!.value!
+            let offset = query.first { $0.name == "startIndex" }!.value!
+            requests.append("\(search):\(offset)")
+            return .json("{\"Items\":[{\"Id\":\"\(search)-\(offset)\",\"Name\":\"Title\"}],\"TotalRecordCount\":2}")
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        model.search = "Old"
+        await model.loadLibraryPage()
+        model.search = "New"
+        await model.loadVideos(reset: false)
+        XCTAssertEqual(requests, ["Old:0"], "Pagination must wait for the new query's first page")
+        await model.loadLibraryPage()
+        await model.loadVideos(reset: false)
+        XCTAssertEqual(requests, ["Old:0", "New:0", "New:1"])
+        XCTAssertEqual(model.videos.map(\.id), ["New-0", "New-1"])
+        await model.loadVideos(reset: false)
+        XCTAssertEqual(requests.count, 3, "The end of the results must stop pagination")
+    }
+
+    @MainActor
+    func testOldSearchPaginationCannotReplaceANewQueriesFirstPage() async throws {
+        let requested = expectation(description: "Old search pagination requested")
+        let transport = TestURLProtocol.session { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let search = query.first { $0.name == "searchTerm" }!.value!
+            let offset = query.first { $0.name == "startIndex" }!.value!
+            let isOldPage = search == "Old" && offset == "1"
+            if isOldPage { requested.fulfill() }
+            return .json(
+                "{\"Items\":[{\"Id\":\"\(search)-\(offset)\",\"Name\":\"Title\"}],\"TotalRecordCount\":3}",
+                delay: isOldPage ? 0.1 : 0)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        model.search = "Old"
+        await model.loadLibraryPage()
+        let load = Task { await model.loadVideos(reset: false) }
+        await fulfillment(of: [requested], timeout: 2)
+        model.search = "New"
+        await model.loadLibraryPage()
+        await load.value
+        XCTAssertEqual(model.videos.map(\.id), ["New-0"])
+        XCTAssertEqual(model.nextVideoOffset, 1)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testRepeatedScrollTriggersShareOnePageAndDuplicatePagesStillAdvance() async throws {
+        let requested = expectation(description: "Second page requested")
+        var offsets: [String] = []
+        let transport = TestURLProtocol.session { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let offset = query.first { $0.name == "startIndex" }!.value!
+            offsets.append(offset)
+            if offset == "1" { requested.fulfill() }
+            let id = offset == "2" ? "last" : "first"
+            return .json(
+                "{\"Items\":[{\"Id\":\"\(id)\",\"Name\":\"Title\"}],\"TotalRecordCount\":3}",
+                delay: offset == "1" ? 0.1 : 0)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        await model.loadLibraryPage()
+        let load = Task { await model.loadVideos(reset: false) }
+        await fulfillment(of: [requested], timeout: 2)
+        await model.loadVideos(reset: false)
+        XCTAssertTrue(model.isLoading)
+        XCTAssertEqual(offsets, ["0", "1"])
+        await load.value
+        XCTAssertEqual(model.videos.map(\.id), ["first"])
+        XCTAssertEqual(model.nextVideoOffset, 2, "The automatic trigger must advance even if every item was duplicated")
+        await model.loadVideos(reset: false)
+        XCTAssertEqual(model.videos.map(\.id), ["first", "last"])
+        XCTAssertFalse(model.canLoadMore)
+        XCTAssertEqual(offsets, ["0", "1", "2"])
+    }
+
+    @MainActor
+    func testCancelledPaginationCanResumeAtTheSameOffsetWithoutLosingTitles() async throws {
+        let requested = expectation(description: "Pagination requested")
+        var offsets: [String] = []
+        let transport = TestURLProtocol.session { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let offset = query.first { $0.name == "startIndex" }!.value!
+            offsets.append(offset)
+            if offsets.count == 2 { requested.fulfill() }
+            return .json(
+                "{\"Items\":[{\"Id\":\"\(offset)\",\"Name\":\"Title\"}],\"TotalRecordCount\":2}",
+                delay: offset == "1" ? 0.1 : 0)
+        }
+        defer { transport.invalidateAndCancel() }
+        let model = try model(transport: transport)
+        await model.loadLibraryPage()
+        let load = Task { await model.loadVideos(reset: false) }
+        await fulfillment(of: [requested], timeout: 2)
+        load.cancel()
+        await load.value
+        XCTAssertEqual(model.videos.map(\.id), ["0"])
+        XCTAssertEqual(model.nextVideoOffset, 1)
+        XCTAssertTrue(model.canLoadMore)
+        XCTAssertNil(model.errorMessage)
+        await model.loadVideos(reset: false)
+        XCTAssertEqual(model.videos.map(\.id), ["0", "1"])
+        XCTAssertEqual(offsets, ["0", "1", "1"])
     }
 
     @MainActor

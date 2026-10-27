@@ -3,12 +3,14 @@ import SwiftUI
 
 /// Shared by title menus, episode menus and the detail-page download button.
 struct DownloadActions: View {
-    @ObservedObject var downloads: DownloadManager
+    @ObservedObject var downloads: DownloadLibrary
     let video: VideoItem
 
     var body: some View {
         if video.type == "Series" {
-            let episodes = downloads.records.filter { $0.video.seriesID == video.id && $0.state != .removed }
+            let episodes = downloads.records.filter {
+                $0.video.seriesLibraryID == video.libraryID && $0.state != .removed
+            }
             if !episodes.isEmpty {
                 if episodes.contains(where: \.isActive) {
                     Button("Pause Downloads") {
@@ -60,7 +62,7 @@ struct DownloadActions: View {
 }
 
 struct DownloadButton: View {
-    @ObservedObject var downloads: DownloadManager
+    @ObservedObject var downloads: DownloadLibrary
     let video: VideoItem
     var body: some View {
         if video.type == "Movie" || video.type == "Episode" {
@@ -92,10 +94,13 @@ struct DownloadButton: View {
 }
 
 struct DownloadStatus: View {
-    @ObservedObject var downloads: DownloadManager
+    @ObservedObject var downloads: DownloadLibrary
     let video: VideoItem
     private var records: [DownloadRecord] {
-        downloads.records.filter { $0.state != .removed && ($0.video.id == video.id || $0.video.seriesID == video.id) }
+        downloads.records.filter {
+            $0.state != .removed
+                && ($0.video.libraryID == video.libraryID || $0.video.seriesLibraryID == video.libraryID)
+        }
     }
     var body: some View {
         let entries = records

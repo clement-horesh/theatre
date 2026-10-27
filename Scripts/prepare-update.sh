@@ -3,13 +3,13 @@ set -euo pipefail
 TASK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$TASK_ROOT"
 if [ "$#" -ne 2 ]; then
-    printf 'Usage: bash Scripts/prepare-update.sh /path/to/Theatre.app v0.1.1\n' >&2
+    printf 'Usage: bash Scripts/prepare-update.sh /path/to/Theatre.app v0.2.0\n' >&2
     exit 1
 fi
 TASK_APP="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 TASK_TAG="$2"
 if ! [[ "$TASK_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]]; then
-    printf 'Specify a versioned GitHub release tag, such as v0.1.1.\n' >&2
+    printf 'Specify a versioned GitHub release tag, such as v0.2.0.\n' >&2
     exit 1
 fi
 TASK_TOOLS="$TASK_ROOT/.build/artifacts/sparkle/Sparkle/bin"
@@ -33,9 +33,8 @@ case "$TASK_TAG" in
     "v$TASK_VERSION"|"v$TASK_VERSION"-*) ;;
     *) printf 'The release tag must match app version %s.\n' "$TASK_VERSION" >&2; exit 1 ;;
 esac
-TASK_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$TASK_APP/Contents/Info.plist")"
 TASK_OUTPUT="$TASK_ROOT/dist/updates/$TASK_TAG"
-TASK_NAME="Theatre-$TASK_VERSION-$TASK_BUILD"
+TASK_NAME="Theatre-$TASK_VERSION"
 if [ -e "$TASK_OUTPUT" ]; then
     printf 'Update output already exists: %s. Move it aside before regenerating.\n' "$TASK_OUTPUT" >&2
     exit 1

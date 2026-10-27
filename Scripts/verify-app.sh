@@ -12,6 +12,10 @@ import plistlib, re, subprocess, sys
 app = Path(sys.argv[1]).resolve()
 with (app / 'Contents/Info.plist').open('rb') as source:
     info = plistlib.load(source)
+ats = info.get('NSAppTransportSecurity', {})
+overrides = ('NSAllowsArbitraryLoadsForMedia', 'NSAllowsArbitraryLoadsInWebContent', 'NSAllowsLocalNetworking')
+if ats.get('NSAllowsArbitraryLoads') is not True or any(key in ats for key in overrides):
+    raise SystemExit('Jellyfin certificate exceptions require NSAllowsArbitraryLoads without overriding ATS keys.')
 binary = app / 'Contents/MacOS' / info['CFBundleExecutable']
 commands = subprocess.check_output(['otool', '-l', str(binary)], text=True)
 rpaths = []

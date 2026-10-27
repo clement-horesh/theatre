@@ -102,11 +102,14 @@ final class PlaybackSession: ObservableObject {
 
     func play(
         _ video: VideoItem, compatibleOnly: Bool = false, startFromBeginning: Bool = false,
-        at position: Double? = nil, playing: Bool = true
+        at position: Double? = nil, playing: Bool = true,
+        using nextClient: JellyfinClient? = nil, downloads nextDownloads: DownloadManager? = nil
     ) {
-        guard let client else { return }
+        guard let client = nextClient ?? client else { return }
         let nativePlayback = playback.usesApplePlayback && !compatibleOnly
         stopPlayback(leaveFullscreen: false, closeWindow: false, preservingApplePlayback: nativePlayback)
+        self.client = client
+        if nextClient != nil { downloads = nextDownloads }
         currentVideo = video
         isStartingPlayback = true
         loadEpisodeContext(video, client: client)

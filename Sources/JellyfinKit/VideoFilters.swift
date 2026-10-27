@@ -27,6 +27,10 @@ public struct VideoFilters: Equatable, Hashable, Sendable {
 public struct VideoFilterOptions: Decodable, Sendable {
     public let genres: [String]
     public let years: [Int]
+    public init(genres: [String], years: [Int]) {
+        self.genres = genres
+        self.years = years
+    }
     enum CodingKeys: String, CodingKey {
         case genres = "Genres"
         case years = "Years"

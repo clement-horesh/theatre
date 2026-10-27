@@ -87,6 +87,7 @@ struct MovieLibraryView: View {
                 .ignoresSafeArea()
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.65), value: featuredColor)
             }
+            .onChange(of: model.libraryIdentity) { _ in path = NavigationPath() }
             .onChange(of: model.librarySection) { _ in path = NavigationPath() }
             .onChange(of: model.showsDownloads) { _ in
                 path = NavigationPath()
@@ -97,16 +98,17 @@ struct MovieLibraryView: View {
             .onChange(of: model.playbackRevision) { _ in chooseFeature() }
             .task(
                 id: LibraryQuery(
-                    userID: model.client?.session?.userID, section: model.librarySection, search: model.search,
+                    userID: model.libraryIdentity + (model.serverFilter ?? ""), section: model.librarySection,
+                    search: model.search,
                     filters: model.libraryFilters, downloads: model.showsDownloads)
             ) {
                 do {
                     if !model.search.isEmpty { try await Task.sleep(nanoseconds: 350_000_000) }
                     try Task.checkCancellation()
-                    await model.loadVideos()
+                    await model.loadLibraryPage()
                 } catch {}
             }
-            .task(id: "\(model.client?.session?.userID ?? ""):\(scenePhase)") {
+            .task(id: "\(model.libraryIdentity):\(scenePhase)") {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     model.downloads.synchronize()
@@ -129,9 +131,7 @@ struct MovieLibraryView: View {
             }
         }
         .overlay {
-            if !model.showsDownloads && model.isLoading && model.videos.isEmpty && (!isHome || !model.search.isEmpty) {
-                ProgressView("Loading library…")
-            } else if !model.showsDownloads && !model.isLoading && model.videos.isEmpty && model.errorMessage == nil
+            if !model.showsDownloads && !model.isLoading && model.videos.isEmpty && model.errorMessage == nil
                 && (!isHome || !model.search.isEmpty
                     || (model.recentlyAddedVideos.isEmpty && model.resumeVideos.isEmpty))
             {
@@ -153,7 +153,7 @@ struct MovieLibraryView: View {
             VStack(alignment: .leading, spacing: 26) {
                 if showsFeature, !featuredVideos.isEmpty {
                     FeaturedRecommendationCarousel(
-                        videos: featuredVideos, client: model.client,
+                        videos: featuredVideos, clientForVideo: { model.client(for: $0) },
                         isPreparing: model.isStartingPlayback, isActive: path.isEmpty && !model.isPlayerWindowKey,
                         onColor: { featuredColor = Color(nsColor: $0) },
                         onPlay: { video in
@@ -162,6 +162,11 @@ struct MovieLibraryView: View {
                         onToggleWatched: { video in Task { await model.toggleWatched(video) } }
                     )
                     .frame(height: featureHeight(width: width))
+                } else if showsFeature && model.isLoading {
+                    LoadingPlaceholder()
+                        .frame(height: featureHeight(width: width))
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .accessibilityHidden(false).accessibilityLabel("Loading recommendations")
                 }
                 if model.search.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -172,11 +177,15 @@ struct MovieLibraryView: View {
                         }
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(spacing: 18) {
-                                ForEach(model.resumeVideos) { video in
+                                if model.resumeVideos.isEmpty && model.isLoading {
+                                    ForEach(0..<4) { _ in MediaCardSkeleton().frame(width: 340) }
+                                }
+                                ForEach(model.resumeVideos, id: \.libraryID) { video in
                                     Button {
                                         model.play(video)
                                     } label: {
-                                        ContinueMediaCard(video: video, client: model.client).frame(width: 340)
+                                        ContinueMediaCard(video: video, client: model.client(for: video)).frame(
+                                            width: 340)
                                     }
                                     .buttonStyle(.plain)
                                     .contextMenu { WatchStatusAction(video: video, model: model) }
@@ -184,10 +193,10 @@ struct MovieLibraryView: View {
                                     .accessibilityLabel("Resume \(video.title)")
                                     .accessibilityHint("Starts video playback directly")
                                     .accessibilityValue(video.accessibleWatchStatus)
-                                    .accessibilityIdentifier("continue-\(video.id)")
+                                    .accessibilityIdentifier("continue-\(video.libraryID)")
                                     .libraryCardFocus(
-                                        "continue:\(video.id)", focus: $focusedCard,
-                                        items: model.resumeVideos.map { "continue:\($0.id)" }
+                                        "continue:\(video.libraryID)", focus: $focusedCard,
+                                        items: model.resumeVideos.map { "continue:\($0.libraryID)" }
                                     ) { if !model.isStartingPlayback { model.play(video) } }
                                 }
                                 if model.canLoadMoreResume {
@@ -198,16 +207,22 @@ struct MovieLibraryView: View {
                             .padding(.bottom, 6)
                         }
                         .focusSection().accessibilityIdentifier("continueRow")
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(
+                            model.resumeVideos.isEmpty && model.isLoading ? "Loading Continue titles" : "Continue")
                     }
                     .padding(.top, 14)
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Recently Added").font(.title2.weight(.semibold))
                         ScrollView(.horizontal, showsIndicators: false) {
                             LazyHStack(alignment: .top, spacing: 24) {
-                                ForEach(model.recentlyAddedVideos) { video in
+                                if model.recentlyAddedVideos.isEmpty && model.isLoading {
+                                    ForEach(0..<8) { _ in MediaCardSkeleton(poster: true).frame(width: 180) }
+                                }
+                                ForEach(model.recentlyAddedVideos, id: \.libraryID) { video in
                                     NavigationLink(value: video) {
                                         MoviePoster(
-                                            video: video, client: model.client,
+                                            video: video, client: model.client(for: video),
                                             progressVideo: model.progressVideo(for: video)
                                         ).frame(width: 180)
                                     }
@@ -218,39 +233,47 @@ struct MovieLibraryView: View {
                                             + (model.progressVideo(for: video).isInProgress
                                                 ? ", In progress" : (video.isUnwatched ? ", Unwatched" : ""))
                                     )
-                                    .accessibilityIdentifier("recent-\(video.id)")
+                                    .accessibilityIdentifier("recent-\(video.libraryID)")
                                     .libraryCardFocus(
-                                        "recent:\(video.id)", focus: $focusedCard,
-                                        items: model.recentlyAddedVideos.map { "recent:\($0.id)" }
+                                        "recent:\(video.libraryID)", focus: $focusedCard,
+                                        items: model.recentlyAddedVideos.map { "recent:\($0.libraryID)" }
                                     ) { path.append(video) }
                                 }
                             }
                             .padding(.bottom, 12)
                         }
                         .focusSection().accessibilityIdentifier("recentlyAddedRow")
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel(
+                            model.recentlyAddedVideos.isEmpty && model.isLoading
+                                ? "Loading Recently Added titles" : "Recently Added")
                     }
                     .padding(.top, 14)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 280, maximum: 380), spacing: 18)], spacing: 18) {
-                        ForEach(model.videos) { video in
+                        if model.isLoading && model.videos.isEmpty {
+                            ForEach(0..<9) { _ in MediaCardSkeleton() }
+                        }
+                        ForEach(model.videos, id: \.libraryID) { video in
                             NavigationLink(value: video) {
-                                ContinueMediaCard(video: video, client: model.client, showsPlaybackInfo: false)
+                                ContinueMediaCard(
+                                    video: video, client: model.client(for: video), showsPlaybackInfo: false)
                             }
                             .buttonStyle(.plain)
                             .libraryCardFocus(
-                                video.id, focus: $focusedCard, items: model.videos.map(\.id),
+                                video.libraryID, focus: $focusedCard, items: model.videos.map(\.libraryID),
                                 columns: max(1, Int((width - 30) / 298))
                             ) { path.append(video) }
                             .accessibilityLabel("Details for \(video.title)")
                             .accessibilityValue(model.progressVideo(for: video).accessibleWatchStatus)
                             .contextMenu { WatchStatusAction(video: video, model: model) }
                         }
+                        LibraryPagination(model: model)
                     }
                     .focusSection()
-                }
-                if model.canLoadMore && !model.search.isEmpty {
-                    Button("Load more") { Task { await model.loadVideos(reset: false) } }
-                        .frame(maxWidth: .infinity).padding(.bottom, 24)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(
+                        model.isLoading && model.videos.isEmpty ? "Loading search results" : "Search results")
                 }
                 if let error = model.errorMessage { LibraryConnectionIssue(model: model, message: error) }
             }
@@ -426,7 +449,10 @@ struct MoviePoster: View {
                 // Derive the cover height from its width, never the title's height.
                 .fixedSize(horizontal: false, vertical: true)
                 .overlay {
-                    JellyfinArtwork(request: try? client?.imageRequest(for: video, type: .primary, maxWidth: 420)) {
+                    JellyfinArtwork(
+                        request: try? client?.imageRequest(for: video, type: .primary, maxWidth: 420),
+                        blurHashes: video.imageBlurHashes
+                    ) {
                         ZStack {
                             Color.secondary.opacity(0.12)
                             Image(systemName: "film").font(.system(size: 32)).foregroundStyle(.secondary)

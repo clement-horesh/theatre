@@ -2,7 +2,18 @@ import JellyfinKit
 import SwiftUI
 
 struct DownloadTransfersView: View {
+    @ObservedObject var downloads: DownloadLibrary
+
+    var body: some View {
+        ForEach(downloads.accounts, id: \.directory) { account in
+            DownloadAccountTransfersView(downloads: account, library: downloads)
+        }
+    }
+}
+
+private struct DownloadAccountTransfersView: View {
     @ObservedObject var downloads: DownloadManager
+    let library: DownloadLibrary
     private var transfers: [DownloadRecord] {
         downloads.records.filter { $0.state != .complete && $0.state != .removed }
     }
@@ -48,7 +59,7 @@ struct DownloadTransfersView: View {
                             Button(record.state == .failed ? "Retry" : "Resume") { downloads.start(record.video) }
                         }
                         Menu {
-                            DownloadActions(downloads: downloads, video: record.video)
+                            DownloadActions(downloads: library, video: record.video)
                         } label: {
                             Image(systemName: "ellipsis")
                         }

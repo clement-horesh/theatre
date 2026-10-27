@@ -3,6 +3,18 @@ import Foundation
 /// Credentials and authenticated assets must remain on their original server.
 public final class JellyfinRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
     public static let shared = JellyfinRedirectPolicy()
+    public func urlSession(
+        _ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+            let trust = challenge.protectionSpace.serverTrust
+        {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
 
     public static func allowsRedirect(from origin: URL?, to target: URL?) -> Bool {
         guard let origin, let target, target.user == nil, target.password == nil,

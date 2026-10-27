@@ -22,7 +22,7 @@ final class PlaybackPreferences: ObservableObject {
 
 struct PlaybackSettingsView: View {
     @ObservedObject var preferences: PlaybackPreferences
-    @ObservedObject var downloads: DownloadManager
+    @ObservedObject var downloads: DownloadLibrary
     @ObservedObject var updater: AppUpdater
     private let languages = Locale.LanguageCode.isoLanguageCodes.map(\.identifier).sorted {
         (Locale.current.localizedString(forLanguageCode: $0) ?? $0)

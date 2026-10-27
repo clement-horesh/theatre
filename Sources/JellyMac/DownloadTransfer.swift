@@ -34,6 +34,14 @@ final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unchecked S
     func start() { task.resume() }
     func cancel() { session.invalidateAndCancel() }
 
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        JellyfinRedirectPolicy.shared.urlSession(
+            session, task: task, didReceive: challenge, completionHandler: completionHandler)
+    }
+
     func pause() async -> Data? {
         await withCheckedContinuation { continuation in
             task.cancel { data in continuation.resume(returning: data) }

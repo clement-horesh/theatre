@@ -4,7 +4,7 @@ import SwiftUI
 
 struct FeaturedRecommendationCarousel: View {
     let videos: [VideoItem]
-    let client: JellyfinClient?
+    var clientForVideo: (VideoItem) -> JellyfinClient?
     let isPreparing: Bool
     let isActive: Bool
     let onColor: (NSColor) -> Void
@@ -21,22 +21,22 @@ struct FeaturedRecommendationCarousel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var current: VideoItem? { videos.isEmpty ? nil : videos[min(index, videos.count - 1)] }
-    private var currentID: String? { current?.id }
+    private var currentID: String? { current?.libraryID }
     private var rotating: Bool {
         isActive && scenePhase == .active && videos.count > 1 && !keyboardFocused
             && !NSWorkspace.shared.isVoiceOverEnabled
     }
-    private var rotationKey: String { "\(videos.map(\.id)):\(restartClock):\(rotating)" }
+    private var rotationKey: String { "\(videos.map(\.libraryID)):\(restartClock):\(rotating)" }
 
     var body: some View {
         ZStack {
             if let video = current {
                 NavigationLink(value: video) {
                     FeaturedMediaView(
-                        video: details[video.id] ?? video, client: client,
+                        video: details[video.libraryID] ?? video, client: clientForVideo(video),
                         onColor: { color in
-                            colors[video.id] = color
-                            if currentID == video.id { onColor(color) }
+                            colors[video.libraryID] = color
+                            if currentID == video.libraryID { onColor(color) }
                         })
                 }
                 .buttonStyle(.plain).accessibilityIdentifier("featuredMedia")
@@ -45,7 +45,7 @@ struct FeaturedRecommendationCarousel: View {
                         onToggleWatched(video)
                     }
                 }
-                .id(video.id)
+                .id(video.libraryID)
                 .transition(.opacity)
                 VStack {
                     Spacer()
@@ -76,7 +76,7 @@ struct FeaturedRecommendationCarousel: View {
                 VStack {
                     Spacer()
                     HStack(spacing: 0) {
-                        ForEach(Array(videos.enumerated()), id: \.element.id) { position, video in
+                        ForEach(Array(videos.enumerated()), id: \.element.libraryID) { position, video in
                             Button {
                                 select(position)
                             } label: {
@@ -131,7 +131,7 @@ struct FeaturedRecommendationCarousel: View {
         .onChange(of: currentID) { id in
             if let id, let color = colors[id] { onColor(color) }
         }
-        .onChange(of: videos.map(\.id)) { _ in
+        .onChange(of: videos.map(\.libraryID)) { _ in
             index = 0
             restartClock = UUID()
         }
@@ -144,11 +144,11 @@ struct FeaturedRecommendationCarousel: View {
             }
         }
         .task(id: videos) {
-            guard let client else { return }
-            let ids = Set(videos.map(\.id))
+            let ids = Set(videos.map(\.libraryID))
             colors = colors.filter { ids.contains($0.key) }
-            details = [:]
+            details = details.filter { ids.contains($0.key) }
             for video in videos {
+                guard let client = clientForVideo(video) else { continue }
                 guard !Task.isCancelled else { return }
                 let request =
                     (try? client.imageRequest(for: video, type: .backdrop, maxWidth: 2560))
@@ -156,12 +156,12 @@ struct FeaturedRecommendationCarousel: View {
                 if let request, let image = try? await ArtworkCache.shared.image(for: request) {
                     guard !Task.isCancelled else { return }
                     let color = ArtworkColor.dominant(in: image)
-                    colors[video.id] = color
-                    if currentID == video.id { onColor(color) }
+                    colors[video.libraryID] = color
+                    if currentID == video.libraryID { onColor(color) }
                 }
                 if let detail = try? await client.item(id: video.id) {
                     guard !Task.isCancelled else { return }
-                    details[video.id] = detail
+                    details[video.libraryID] = detail
                     if let logo = try? client.imageRequest(for: detail, type: .logo, maxWidth: 700) {
                         _ = try? await ArtworkCache.shared.image(for: logo)
                     }

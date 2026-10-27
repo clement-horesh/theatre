@@ -1,14 +1,18 @@
 import Foundation
 
 public struct VideoPerson: Codable, Identifiable, Sendable, Hashable {
+    public var serverID: String?
     public let itemID: String?
     public let name: String
     public let role: String?
     public let type: String?
+    public var imageBlurHashes: [String: [String: String]]?
     public let primaryImageTag: String?
-    public var id: String { "\(itemID ?? name):\(type ?? ""):\(role ?? "")" }
+    public var id: String { "\(serverID ?? ""):\(itemID ?? name):\(type ?? ""):\(role ?? "")" }
     public var credit: String { (role?.isEmpty == false ? role : type) ?? "" }
     enum CodingKeys: String, CodingKey {
+        case imageBlurHashes = "ImageBlurHashes"
+        case serverID = "TheatreServerID"
         case itemID = "Id"
         case name = "Name"
         case role = "Role"

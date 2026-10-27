@@ -2,10 +2,12 @@ import Foundation
 
 /// A small, platform-independent Jellyfin API client shared by future Apple clients.
 public struct JellyfinClient: Sendable {
+    public var serverID: String { "\(serverURL.absoluteString)|\(session?.userID ?? "")" }
     public let serverURL: URL
     public let deviceID: String
     public let session: JellyfinSession?
     private let transport: URLSession
+    private let browseCache = JellyfinBrowseCache()
 
     public init(
         address: String, deviceID: String, transport: URLSession = .shared,
@@ -55,7 +57,7 @@ public struct JellyfinClient: Sendable {
             URLQueryItem(name: "userId", value: session.userID),
             .init(name: "recursive", value: "true"),
             .init(name: "isMissing", value: "false"),
-            .init(name: "isPlaceHolder", value: "false"),
+            .init(name: "excludeLocationTypes", value: "Virtual"),
             .init(
                 name: "sortBy",
                 value: parentID == nil
@@ -70,7 +72,7 @@ public struct JellyfinClient: Sendable {
             .init(name: "enableImages", value: "true"),
             .init(name: "enableUserData", value: "true"),
             .init(name: "imageTypeLimit", value: "1"),
-            .init(name: "fields", value: "Overview,Genres,SortName"),
+            .init(name: "fields", value: "Overview,Genres,SortName,DateCreated"),
             .init(name: "enableTotalRecordCount", value: "true"),
             .init(name: "startIndex", value: String(startIndex)),
             .init(name: "limit", value: String(limit)),
@@ -84,29 +86,27 @@ public struct JellyfinClient: Sendable {
         if !itemTypes.isEmpty { query.append(.init(name: "includeItemTypes", value: itemTypes.joined(separator: ","))) }
         if !itemTypes.contains("Series") { query.append(.init(name: "mediaTypes", value: "Video")) }
         if let parentID { query.append(.init(name: "parentId", value: parentID)) }
-        return try decode(await request("Items", query: query))
+        return try await browse("Items", query: query, cached: !newestFirst && !resumableOnly)
     }
 
     public func videoFilterOptions(itemTypes: [String]) async throws -> VideoFilterOptions {
         guard let session else { throw JellyfinError.unauthorized }
-        return try decode(
-            await request(
-                "Items/Filters",
-                query: [
-                    .init(name: "userId", value: session.userID),
-                    .init(name: "includeItemTypes", value: itemTypes.joined(separator: ",")),
-                ]))
+        return try await browse(
+            "Items/Filters",
+            query: [
+                .init(name: "userId", value: session.userID),
+                .init(name: "includeItemTypes", value: itemTypes.joined(separator: ",")),
+            ])
     }
 
     public func relatedTitles(itemID: String, limit: Int = 12) async throws -> [VideoItem] {
         guard let session else { throw JellyfinError.unauthorized }
-        let page: VideoPage = try decode(
-            await request(
-                "Items/\(itemID)/Similar",
-                query: [
-                    .init(name: "userId", value: session.userID), .init(name: "limit", value: String(limit)),
-                    .init(name: "fields", value: "Overview,Genres"),
-                ]))
+        let page: VideoPage = try await browse(
+            "Items/\(itemID)/Similar",
+            query: [
+                .init(name: "userId", value: session.userID), .init(name: "limit", value: String(limit)),
+                .init(name: "fields", value: "Overview,Genres"),
+            ])
         var seen = Set<String>([itemID])
         return page.items.filter { ["Movie", "Series"].contains($0.type) && seen.insert($0.id).inserted }
     }
@@ -128,27 +128,26 @@ public struct JellyfinClient: Sendable {
             query.append(.init(name: "person", value: person.name))
         }
         if let type = person.type, !type.isEmpty { query.append(.init(name: "personTypes", value: type)) }
-        return try decode(await request("Items", query: query))
+        return try await browse("Items", query: query)
     }
 
     public func item(id: String) async throws -> VideoItem {
         guard let session else { throw JellyfinError.unauthorized }
         // Explicitly request detail collections; catalog items only contain the
         // fields selected by the library query and must not stand in for details.
-        let page: VideoPage = try decode(
-            await request(
-                "Items",
-                query: [
-                    .init(name: "userId", value: session.userID), .init(name: "ids", value: id),
-                    .init(
-                        name: "fields",
-                        value:
-                            "Overview,Genres,People,Studios,ProductionLocations,MediaStreams,MediaSources,ChildCount,RemoteTrailers"
-                    ),
-                    .init(name: "enableUserData", value: "true"), .init(name: "enableImages", value: "true"),
-                    .init(name: "imageTypeLimit", value: "1"), .init(name: "limit", value: "1"),
-                    .init(name: "enableTotalRecordCount", value: "true"),
-                ]))
+        let page: VideoPage = try await browse(
+            "Items",
+            query: [
+                .init(name: "userId", value: session.userID), .init(name: "ids", value: id),
+                .init(
+                    name: "fields",
+                    value:
+                        "Overview,Genres,People,Studios,ProductionLocations,MediaStreams,MediaSources,ChildCount,RemoteTrailers"
+                ),
+                .init(name: "enableUserData", value: "true"), .init(name: "enableImages", value: "true"),
+                .init(name: "imageTypeLimit", value: "1"), .init(name: "limit", value: "1"),
+                .init(name: "enableTotalRecordCount", value: "true"),
+            ])
         guard let item = page.items.first(where: { $0.id == id }) else { throw JellyfinError.invalidResponse }
         return item
     }
@@ -191,7 +190,7 @@ public struct JellyfinClient: Sendable {
                     query: [
                         .init(name: "userId", value: session.userID),
                         .init(name: "ids", value: seriesIDs.joined(separator: ",")),
-                        .init(name: "fields", value: "Overview,Genres,ChildCount"),
+                        .init(name: "fields", value: "Overview,Genres,ChildCount,DateCreated"),
                         .init(name: "enableUserData", value: "true"),
                         .init(name: "enableImages", value: "true"), .init(name: "imageTypeLimit", value: "1"),
                         .init(name: "enableTotalRecordCount", value: "true"),
@@ -202,7 +201,11 @@ public struct JellyfinClient: Sendable {
         }
         // Keep the order of each title's first appearance in the newest-first feed.
         return entries.compactMap { item in
-            if item.type == "Episode" { return item.seriesID.flatMap { shows[$0] } }
+            if item.type == "Episode" {
+                guard var show = item.seriesID.flatMap({ shows[$0] }) else { return nil }
+                show.dateCreated = item.dateCreated ?? show.dateCreated
+                return show
+            }
             if item.type == "Series" { return shows[item.id] ?? item }
             return item
         }
@@ -210,13 +213,12 @@ public struct JellyfinClient: Sendable {
 
     public func seasons(seriesID: String) async throws -> VideoPage {
         guard let session else { throw JellyfinError.unauthorized }
-        return try decode(
-            await request(
-                "Shows/\(seriesID)/Seasons",
-                query: [
-                    .init(name: "userId", value: session.userID), .init(name: "enableUserData", value: "true"),
-                    .init(name: "enableImages", value: "true"), .init(name: "imageTypeLimit", value: "1"),
-                ]))
+        return try await browse(
+            "Shows/\(seriesID)/Seasons",
+            query: [
+                .init(name: "userId", value: session.userID), .init(name: "enableUserData", value: "true"),
+                .init(name: "enableImages", value: "true"), .init(name: "imageTypeLimit", value: "1"),
+            ])
     }
 
     public func episodes(
@@ -234,7 +236,7 @@ public struct JellyfinClient: Sendable {
         ]
         if let seasonID { query.append(.init(name: "seasonId", value: seasonID)) }
         if let startItemID { query.append(.init(name: "startItemId", value: startItemID)) }
-        return try decode(await request("Shows/\(seriesID)/Episodes", query: query))
+        return try await browse("Shows/\(seriesID)/Episodes", query: query)
     }
 
     /// Resolve a show action without downloading its complete episode catalog.
@@ -291,6 +293,7 @@ public struct JellyfinClient: Sendable {
             query: [
                 .init(name: "userId", value: session.userID)
             ])
+        clearBrowsingCache()
     }
 
     public func stopEncoding(_ stream: PlaybackStream) async throws {
@@ -459,6 +462,7 @@ public struct JellyfinClient: Sendable {
             playSessionID: stream.playSessionID, positionTicks: Int64(safeSeconds * 10_000_000),
             isPaused: paused, playMethod: stream.method)
         _ = try await request("Sessions/Playing\(event.suffix)", method: "POST", body: body)
+        if case .stopped = event { clearBrowsingCache() }
     }
 
     /// The download endpoint enforces Jellyfin's per-user download permission.
@@ -484,9 +488,26 @@ public struct JellyfinClient: Sendable {
         _ = try await request(
             "UserItems/\(itemID)/UserData", method: "POST",
             query: [.init(name: "userId", value: session.userID)], body: data)
+        clearBrowsingCache()
     }
 
-    public func logout() async throws { _ = try await request("Sessions/Logout", method: "POST") }
+    public func logout() async throws {
+        clearBrowsingCache()
+        _ = try await request("Sessions/Logout", method: "POST")
+    }
+
+    public func clearBrowsingCache() { browseCache.clear() }
+
+    private func browse<T: Decodable>(_ path: String, query: [URLQueryItem], cached: Bool = true) async throws -> T {
+        let url = try endpoint(path, query: query)
+        let previous = browseCache.response(for: url)
+        if cached, let data = previous.data { return try decode(data) }
+        let data = try await request(path, query: query)
+        try Task.checkCancellation()
+        let result: T = try decode(data)
+        if cached { browseCache.store(data, for: url, generation: previous.generation) }
+        return result
+    }
 
     private func endpoint(_ path: String, query: [URLQueryItem] = []) throws -> URL {
         guard var parts = URLComponents(url: serverURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
@@ -572,7 +593,14 @@ public struct JellyfinClient: Sendable {
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {
-        do { return try JSONDecoder().decode(T.self, from: data) } catch { throw JellyfinError.invalidResponse }
+        do {
+            let result = try JSONDecoder().decode(T.self, from: data)
+            if var page = result as? VideoPage {
+                page.items = page.items.map { $0.onServer(serverID) }
+                return page as! T
+            }
+            return result
+        } catch { throw JellyfinError.invalidResponse }
     }
 }
 

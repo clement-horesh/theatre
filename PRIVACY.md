@@ -2,7 +2,7 @@
 
 Theatre connects to the Jellyfin server address you enter. Your credentials are sent to that server to sign in; Theatre stores the server-issued session token in the macOS Keychain and does not save your password. The server address and application preferences are stored locally. Sign Out removes the saved session.
 
-Browsing, playback reporting, watch-status changes, downloads, and progress synchronization send requests to your Jellyfin server. An HTTP server connection is not encrypted; HTTPS uses the server’s certificate validation. Your Jellyfin server and its operators control their own logs and retention.
+Browsing, playback reporting, watch-status changes, downloads, and progress synchronization send requests to your Jellyfin server. An HTTP server connection is not encrypted. Jellyfin API, artwork, download, and HTTPS direct-play connections accept unverified HTTPS certificates, including self-signed certificates. These connections remain encrypted, but Theatre does not verify the server’s identity. Your Jellyfin server and its operators control their own logs and retention.
 
 Artwork and downloaded media, metadata, subtitles, and pending watch progress are cached on your Mac. Downloads are separated by server and account. Signing out hides that account’s downloads; it does not delete them. Use the download removal controls to delete saved media.
 

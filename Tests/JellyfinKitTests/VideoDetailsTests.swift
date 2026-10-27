@@ -4,6 +4,20 @@ import XCTest
 @testable import JellyfinKit
 
 final class VideoDetailsTests: XCTestCase {
+    func testBlurHashesSurviveMetadataAndOfflineCatalogRoundTrips() throws {
+        let video = try decode(
+            #"""
+            {"Id":"movie","Name":"Movie","ImageBlurHashes":{"Primary":{"poster":"00TI:j"},"Backdrop":{"parent":"000036"}},
+             "People":[{"Id":"person","Name":"Actor","ImageBlurHashes":{"Primary":{"portrait":"0009dg"}}}]}
+            """#)
+        XCTAssertEqual(video.imageBlurHashes?["Primary"]?["poster"], "00TI:j")
+        XCTAssertEqual(video.imageBlurHashes?["Backdrop"]?["parent"], "000036")
+        XCTAssertEqual(video.people?.first?.imageBlurHashes?["Primary"]?["portrait"], "0009dg")
+        let saved = try JSONDecoder().decode(VideoItem.self, from: JSONEncoder().encode(video))
+        XCTAssertEqual(saved, video)
+        XCTAssertNil(try decode(#"{"Id":"old","Name":"Old catalog"}"#).imageBlurHashes)
+    }
+
     func testHydratingDetailsForSameMovieIsAContentChange() throws {
         let catalog = try decode(#"{"Id":"movie","Name":"Movie"}"#)
         let hydrated = try decode(

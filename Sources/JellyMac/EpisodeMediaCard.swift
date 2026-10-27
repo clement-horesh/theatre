@@ -22,7 +22,7 @@ struct EpisodeMediaCard: View {
                         JellyfinArtwork(
                             request: (try? client?.imageRequest(for: episode, type: .primary, maxWidth: 900))
                                 ?? (try? client?.imageRequest(for: episode, type: .backdrop, maxWidth: 900)),
-                            progressBlurHeight: 215, progressBlurRadius: 24
+                            blurHashes: episode.imageBlurHashes, progressBlurHeight: 215, progressBlurRadius: 24
                         ) {
                             Color(white: 0.12)
                         }

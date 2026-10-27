@@ -10,7 +10,7 @@ struct MovieDetailHero: View {
     var canPlay = true
     let onPlay: () -> Void
     let onMore: () -> Void
-    var downloads: DownloadManager? = nil
+    var downloads: DownloadLibrary? = nil
 
     private var category: String {
         [video.type, video.genres?.prefix(2).joined(separator: " · "), video.officialRating]
@@ -25,7 +25,8 @@ struct MovieDetailHero: View {
             ZStack(alignment: .bottomLeading) {
                 JellyfinArtwork(
                     request: (try? client?.imageRequest(for: video, type: .backdrop, maxWidth: 2560))
-                        ?? (try? client?.imageRequest(for: video, type: .primary, maxWidth: 1600))
+                        ?? (try? client?.imageRequest(for: video, type: .primary, maxWidth: 1600)),
+                    blurHashes: video.imageBlurHashes
                 ) { pageColor }
                 .frame(width: geometry.size.width, height: geometry.size.height).clipped()
                 .accessibilityHidden(true)

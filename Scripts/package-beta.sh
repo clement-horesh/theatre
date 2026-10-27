@@ -3,7 +3,7 @@ set -euo pipefail
 TASK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$TASK_ROOT"
 if [ "$#" -ne 1 ]; then
-    printf 'Usage: bash Scripts/package-beta.sh v0.1.1\n' >&2
+    printf 'Usage: bash Scripts/package-beta.sh v0.2.0\n' >&2
     exit 1
 fi
 TASK_TAG="$1"

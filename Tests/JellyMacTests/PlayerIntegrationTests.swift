@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import JellyfinKit
+import SwiftUI
 import XCTest
 
 @testable import JellyMac
@@ -8,6 +9,66 @@ import XCTest
 /// These tests intentionally create native player windows. Run with Scripts/test.sh --interactive.
 final class PlayerIntegrationTests: XCTestCase {
     private var fixtures: URL { Bundle.module.url(forResource: "Fixtures", withExtension: nil)! }
+
+    @MainActor
+    func testLibraryAndSearchLoadMoreOnlyWhenScrolledNearTheBottom() async throws {
+        _ = NSApplication.shared
+        for search in [false, true] {
+            var offsets: [Int] = []
+            let transport = TestURLProtocol.session { request in
+                if request.url!.path.hasSuffix("Filters") { return .json(#"{"Genres":[],"Years":[]}"#) }
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                let offset = Int(query.first { $0.name == "startIndex" }!.value!)!
+                offsets.append(offset)
+                let items = (offset..<min(offset + 100, 300)).map {
+                    "{\"Id\":\"\($0)\",\"Name\":\"Title \($0)\",\"Type\":\"Movie\"}"
+                }.joined(separator: ",")
+                return .json("{\"Items\":[\(items)],\"TotalRecordCount\":300}")
+            }
+            defer { transport.invalidateAndCancel() }
+            let store = MemorySessionStore()
+            let session = try JSONDecoder().decode(
+                JellyfinSession.self,
+                from: Data(#"{"userID":"user","username":"demo","accessToken":"test"}"#.utf8))
+            store.saved = SavedSession(address: "https://pagination.test", deviceID: "test", session: session)
+            let model = store.makeModel(transport: transport)
+            model.librarySection = search ? .home : .movies
+            model.search = search ? "Title" : ""
+            await model.loadLibraryPage()
+            let root = search ? AnyView(MovieLibraryView(model: model)) : AnyView(LibraryBrowseView(model: model))
+            let hosting = NSHostingView(rootView: root)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            func findScrollView(_ view: NSView) -> NSScrollView? {
+                (view as? NSScrollView) ?? view.subviews.lazy.compactMap { findScrollView($0) }.first
+            }
+            try await waitUntil { findScrollView(hosting) != nil && model.videos.count == 100 && !model.isLoading }
+            try await Task.sleep(nanoseconds: 600_000_000)
+            XCTAssertEqual(offsets, [0], "The lazy loading indicator must stay inactive above the fold")
+            let scroll = try XCTUnwrap(findScrollView(hosting))
+            for expectedCount in [200, 300] {
+                let document = try XCTUnwrap(scroll.documentView)
+                let bottom =
+                    document.isFlipped
+                    ? max(0, document.bounds.height - scroll.contentView.bounds.height) : 0
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: bottom))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try await waitUntil { model.videos.count >= expectedCount && !model.isLoading }
+                try await Task.sleep(nanoseconds: 200_000_000)
+                XCTAssertEqual(model.videos.count, expectedCount)
+            }
+            // Lazy views may cancel and retry a page as the viewport changes.
+            XCTAssertEqual(Set(offsets), [0, 100, 200])
+            XCTAssertEqual(Set(model.videos.map(\.libraryID)).count, 300)
+            XCTAssertFalse(model.canLoadMore)
+            await model.prepareForTermination()
+        }
+    }
 
     @MainActor
     private func signedIn(_ server: PlaybackFixtureServer) async throws -> JellyfinClient {

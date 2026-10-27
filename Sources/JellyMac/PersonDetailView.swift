@@ -7,6 +7,7 @@ struct PersonDetailView: View {
     @State private var videos: [VideoItem] = []
     @State private var total = 0
     @State private var offset = 0
+    @State private var loadedQuery: String?
     @State private var isLoading = false
     @State private var error: String?
     @State private var gridColumns = 1
@@ -17,7 +18,10 @@ struct PersonDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 HStack(spacing: 24) {
-                    JellyfinArtwork(request: try? model.client?.imageRequest(for: person)) {
+                    JellyfinArtwork(
+                        request: try? model.client(serverID: person.serverID)?.imageRequest(for: person),
+                        blurHashes: person.imageBlurHashes
+                    ) {
                         Color(white: 0.15).overlay { Image(systemName: "person.fill").font(.largeTitle) }
                     }
                     .frame(width: 120, height: 120).clipShape(Circle()).accessibilityHidden(true)
@@ -37,14 +41,15 @@ struct PersonDetailView: View {
                                     GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 24, alignment: .top)
                                 ], alignment: .leading, spacing: 26
                             ) {
-                                ForEach(titles) { video in
+                                ForEach(titles, id: \.libraryID) { video in
                                     NavigationLink(value: video) {
                                         MoviePoster(
-                                            video: video, client: model.client,
+                                            video: video, client: model.client(for: video),
                                             progressVideo: model.progressVideo(for: video))
                                     }
                                     .buttonStyle(.plain).libraryCardFocus(
-                                        video.id, focus: $focusedCard, items: titles.map(\.id), columns: gridColumns
+                                        video.libraryID, focus: $focusedCard, items: titles.map(\.libraryID),
+                                        columns: gridColumns
                                     ) { navigation.video(video) }
                                     .contextMenu { WatchStatusAction(video: video, model: model) }
                                     .accessibilityLabel("Details for \(video.title)")
@@ -63,7 +68,9 @@ struct PersonDetailView: View {
                         }
                     }
                 }
-                if isLoading { ProgressView("Loading titles…") }
+                if isLoading {
+                    if videos.isEmpty { PosterSkeletonGrid() } else { ProgressView("Loading titles…") }
+                }
                 if let error {
                     Text(error).foregroundStyle(.secondary)
                     Button("Retry") { Task { await load() } }
@@ -76,11 +83,14 @@ struct PersonDetailView: View {
         }
         .background(Color(nsColor: ArtworkColor.pageBackground))
         .navigationTitle(person.name)
-        .task(id: person.id) {
+        .task(id: "\(person.id):\(model.playbackRevision)") {
+            let query = "\(person.id):\(model.playbackRevision)"
+            guard loadedQuery != query else { return }
             videos = []
             total = 0
             offset = 0
             await load()
+            if !Task.isCancelled && error == nil { loadedQuery = query }
         }
     }
 
@@ -88,15 +98,16 @@ struct PersonDetailView: View {
         guard !isLoading else { return }
         if model.showsDownloads {
             videos = model.downloads.titles.filter { item in
-                (item.people ?? []).contains {
-                    guard person.type == nil || $0.type == person.type else { return false }
-                    if let id = person.itemID, !id.isEmpty { return $0.itemID == id }
-                    return $0.name.localizedCaseInsensitiveCompare(person.name) == .orderedSame
-                }
+                item.serverID == person.serverID
+                    && (item.people ?? []).contains {
+                        guard person.type == nil || $0.type == person.type else { return false }
+                        if let id = person.itemID, !id.isEmpty { return $0.itemID == id }
+                        return $0.name.localizedCaseInsensitiveCompare(person.name) == .orderedSame
+                    }
             }
             return
         }
-        guard let client = model.client else { return }
+        guard let client = model.client(serverID: person.serverID) else { return }
         isLoading = true
         error = nil
         defer { isLoading = false }
@@ -105,8 +116,8 @@ struct PersonDetailView: View {
             try Task.checkCancellation()
             offset = page.items.isEmpty ? page.totalCount : offset + page.items.count
             total = page.totalCount
-            var seen = Set(videos.map(\.id))
-            videos.append(contentsOf: page.items.filter { seen.insert($0.id).inserted })
+            var seen = Set(videos.map(\.libraryID))
+            videos.append(contentsOf: page.items.filter { seen.insert($0.libraryID).inserted })
         } catch {
             if !Task.isCancelled { self.error = AppModel.friendly(error) }
         }
@@ -124,13 +135,14 @@ struct RelatedTitlesSection: View {
             Text("Related Titles").font(.title2.weight(.semibold))
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 24) {
-                    ForEach(titles) { title in
+                    ForEach(titles, id: \.libraryID) { title in
                         NavigationLink(value: title) {
                             MoviePoster(
-                                video: title, client: model.client, progressVideo: model.progressVideo(for: title))
+                                video: title, client: model.client(for: title),
+                                progressVideo: model.progressVideo(for: title))
                         }
                         .buttonStyle(.plain)
-                        .libraryCardFocus(title.id, focus: $focusedCard, items: titles.map(\.id)) {
+                        .libraryCardFocus(title.libraryID, focus: $focusedCard, items: titles.map(\.libraryID)) {
                             navigation.video(title)
                         }
                         .frame(width: 180)

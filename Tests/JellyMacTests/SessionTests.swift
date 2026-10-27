@@ -8,12 +8,17 @@ import XCTest
 final class MemorySessionStore: SessionStore {
     private let defaultsName = "local.theatre.model-tests.\(UUID().uuidString)"
     lazy var defaults = UserDefaults(suiteName: defaultsName)!
-    var saved: SavedSession?
+    var sessions: [SavedSession] = []
+    var saved: SavedSession? {
+        get { sessions.first }
+        set { sessions = newValue.map { [$0] } ?? [] }
+    }
     var failsToSave = false
-    func load() throws -> SavedSession? { saved }
-    func save(_ session: SavedSession) throws {
+    func loadAll() throws -> [SavedSession] { sessions }
+    func remove(id: String) throws { sessions.removeAll { $0.id == id } }
+    func saveAll(_ sessions: [SavedSession]) throws {
         if failsToSave { throw NSError(domain: "SessionTests", code: 1) }
-        saved = session
+        self.sessions = sessions
     }
     func remove() throws { saved = nil }
     func makeModel(transport: URLSession? = nil) -> AppModel {
